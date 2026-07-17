@@ -4,6 +4,10 @@ import { AGENT_ROSTER } from '@/scene/layout/officeLayout'
 import type { Agent } from '@/types/agent'
 import { QUICK_TOOLS } from '@/config'
 import { getOfficeScene } from '@/scene/officeSceneBridge'
+function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
+  return <svg viewBox="0 0 24 24" width={size} height={size}><use href={'#' + id}/></svg>
+}
+
 export function OfficeSidebar() {
   return (
     <aside className="office-sidebar">
@@ -12,14 +16,14 @@ export function OfficeSidebar() {
         <span>AI 办公全景</span>
       </div>
       <div className="sidebar-search">
-        <span>🔍</span>
+        <SvgIcon id="i-eye" size={12}/>
         <span>搜索工位或工具</span>
         <kbd>⌘K</kbd>
       </div>
       <nav className="sidebar-nav">
-        {[{ label: '办公室', icon: '🏢' }, { label: '概览', icon: '📊' }, { label: '项目', icon: '📁' }, { label: '成员', icon: '👥' }].map(({ label, icon }) => (
+        {[{ label: '办公室', icon: 'i-office' }, { label: '概览', icon: 'i-eye' }, { label: '项目', icon: 'i-folder' }, { label: '成员', icon: 'i-users' }].map(({ label, icon }) => (
           <button key={label} type="button" className={`nav-item ${label === '办公室' ? 'active' : ''}`}>
-            <span className="nav-main"><span className="nav-icon">{icon}</span><span>{label}</span></span>
+            <span className="nav-main"><span className="nav-icon"><SvgIcon id={icon} size={14}/></span><span>{label}</span></span>
             {label === '办公室' && <span className="nav-badge">7</span>}
           </button>
         ))}
@@ -132,7 +136,7 @@ export function OfficeRightPanel() {
         <div className="quick-tools">
           {QUICK_TOOLS.map((t) => (
             <button key={t.label} type="button" className="quick-tool">
-              <span>{t.icon}</span>
+              <SvgIcon id={t.icon} size={18}/>
               <strong>{t.label}</strong>
             </button>
           ))}
@@ -193,7 +197,7 @@ export function OfficeRightPanel() {
             </div>
           </div>
           <div className="stats-row" data-tone="green">
-            <div className="stats-row-icon">💬</div>
+            <div className="stats-row-icon"><SvgIcon id="i-msg" size={14}/></div>
             <div className="stats-row-body">
               <div className="stats-row-title">最爱聊天 Top 3</div>
               <div className="stats-row-list">
@@ -311,13 +315,13 @@ export function OfficeBottomToolbar() {
           <span className="toolbar-speed" onClick={handleSpeed} title="点击切换时间流速">{speed}×</span>
         </span>
         <button type="button" className="toolbar-btn" onClick={handlePause} title={paused ? '继续' : '暂停'}>
-          <span className="toolbar-icon">{paused ? '▶' : '⏸'}</span>{paused ? '继续' : '暂停'}
+          <SvgIcon id={paused ? 'i-play' : 'i-pause'} size={12}/>{paused ? '继续' : '暂停'}
         </button>
         <button type="button" className="toolbar-btn" onClick={handleReset} title="重置场景">
-          <span className="toolbar-icon">🔄</span>重置
+          <SvgIcon id="i-refresh" size={12}/>重置
         </button>
         <button type="button" className="toolbar-btn" onClick={handleScreenshot} title="下载当前画面">
-          <span className="toolbar-icon">📸</span>截图
+          <SvgIcon id="i-camera" size={12}/>截图
         </button>
       </div>
     </div>
