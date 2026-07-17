@@ -4,7 +4,6 @@ import { AGENT_ROSTER } from '@/scene/layout/officeLayout'
 import type { Agent } from '@/types/agent'
 import { QUICK_TOOLS } from '@/config'
 import { getOfficeScene } from '@/scene/officeSceneBridge'
-
 export function OfficeSidebar() {
   return (
     <aside className="office-sidebar">
@@ -83,6 +82,16 @@ export function OfficeHeaderStats() {
 }
 
 export function OfficeRightPanel() {
+  const [activities, setActivities] = useState<Array<{ text: string; color: number; time: string; ts: number }>>([])
+
+  useEffect(() => {
+    const handle = setInterval(() => {
+      const scene = getOfficeScene()
+      if (scene) setActivities(scene.getActivityLog())
+    }, 800)
+    return () => clearInterval(handle)
+  }, [])
+
   return (
     <aside className="office-right-panel">
       <div className="panel-section">
@@ -98,11 +107,22 @@ export function OfficeRightPanel() {
       </div>
       <div className="panel-section panel-grow">
         <h2>实时动态</h2>
-        <ul className="activity-list">
-          <li><span className="activity-dot" style={{ background: '#34c759' }} /><p><strong>小灵</strong> 开始处理新评价数据<time>刚刚</time></p></li>
-          <li><span className="activity-dot" style={{ background: '#a855f7' }} /><p><strong>小分</strong> 前往 <strong>小灵</strong> 的工位<time>1分钟前</time></p></li>
-          <li><span className="activity-dot" style={{ background: '#f5c542' }} /><p><strong>小预</strong> 正在思考预测模型参数<time>3分钟前</time></p></li>
-        </ul>
+        {activities.length === 0 ? (
+          <ul className="activity-list">
+            <li><span className="activity-dot" style={{ background: '#34c759' }} /><p><strong>小灵</strong> 开始处理新评价数据<time>刚刚</time></p></li>
+            <li><span className="activity-dot" style={{ background: '#a855f7' }} /><p><strong>小分</strong> 前往 <strong>小灵</strong> 的工位<time>1分钟前</time></p></li>
+            <li><span className="activity-dot" style={{ background: '#f5c542' }} /><p><strong>小预</strong> 正在思考预测模型参数<time>3分钟前</time></p></li>
+          </ul>
+        ) : (
+          <ul className="activity-list">
+            {activities.map((a, i) => (
+              <li key={a.ts + '-' + i}>
+                <span className="activity-dot" style={{ background: '#' + a.color.toString(16).padStart(6, '0') }} />
+                <p>{a.text}<time>{a.time}</time></p>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </aside>
   )
