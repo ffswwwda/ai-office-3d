@@ -32,6 +32,7 @@ export interface Agent {
   id: string
   name: string
   color: number
+  gender: 'female' | 'male'
   x: number
   y: number
   targetX?: number

@@ -300,10 +300,6 @@ export class OfficeScene {
     if (this.lastToiletCheck < 30) return
     this.lastToiletCheck = 0
 
-    // 找一个空闲 stall
-    const freeStalls = this.stallOccupants.map((o, i) => o === null ? i : -1).filter(i => i >= 0)
-    if (freeStalls.length === 0) return
-
     // 找一个空闲 + 当前在工作状态 + 没在 mission 的 agent
     const candidates = this.agents.filter(a => {
       if (a.state !== 'working' && a.state !== 'idle') return false
@@ -312,22 +308,59 @@ export class OfficeScene {
     })
     if (candidates.length === 0) return
 
-    // 随机 1 个候选
     if (Math.random() > 0.4) return  // 40% 概率触发
     const agent = candidates[Math.floor(Math.random() * candidates.length)]
-    const stallIdx = freeStalls[Math.floor(Math.random() * freeStalls.length)]
 
-    // 随机 1-30 分钟（在 stallEntryTime 数组里存模拟秒）
+    // 按性别分配 stalls：女性 0-2，男性 3-4
+    const isMale = agent.gender === 'male'
+    const correctStalls = isMale ? [3, 4] : [0, 1, 2]
+    const freeCorrect = correctStalls.filter(i => this.stallOccupants[i] === null)
+    
+    let stallIdx: number
+    let isWrongToilet = false
+
+    if (freeCorrect.length > 0) {
+      stallIdx = freeCorrect[Math.floor(Math.random() * freeCorrect.length)]
+    } else {
+      // 对的满了，看错了或不经过直接离开
+      if (Math.random() < 0.12) {
+        // 12% 概率走错厕所
+        const wrongStalls = isMale ? [0, 1, 2] : [3, 4]
+        const freeWrong = wrongStalls.filter(i => this.stallOccupants[i] === null)
+        if (freeWrong.length === 0) return
+        stallIdx = freeWrong[Math.floor(Math.random() * freeWrong.length)]
+        isWrongToilet = true
+      } else {
+        return // 不去了
+      }
+    }
+
     const minutes = Math.random() < 0.7 ? (1 + Math.floor(Math.random() * 5)) : (10 + Math.floor(Math.random() * 25))
     this.stallEntryTime[stallIdx] = minutes * 60
     this.stallOccupants[stallIdx] = agent.id
 
-    // 走过去
+    // 走错了：快速进去又出来
+    if (isWrongToilet) {
+      this.pushActivity('😱 ' + agent.name + ' 走错了厕所！男/女不分了？', 0xef4444)
+      this.walkAgentTo(agent.id, this.stallEntryPos(stallIdx), () => {
+        // 进去 3 秒就出来，退还到门口
+        setTimeout(() => {
+          this.exitStall(stallIdx, agent.id)
+          this.agents.find(x => x.id === agent.id)!.bubbleText = '😰 走错了走错了…'
+          this.pushDataToEntities()
+          // 清除占用
+          this.stallOccupants[stallIdx] = null
+          this.stallEntryTime[stallIdx] = null
+        }, 3000)
+      })
+      return
+    }
+
+    // 正常走
     this.walkAgentTo(agent.id, this.stallEntryPos(stallIdx), () => {
-      // 到达门口后，进入 stall
       this.enterStall(stallIdx, agent.id, agent.name)
     })
-    this.pushActivity(agent.name + ' 走向厕所，准备开门进入', 0x4a90d9)
+    this.pushActivity(agent.name + ' 走向' + (isMale ? '男厕所' : '女厕所') + '，准备开门进入', isMale ? 0x4a90d9 : 0xec4899)
   }
 
   /** 让 agent 走（动画）到指定位置 */
@@ -724,22 +757,45 @@ export class OfficeScene {
     this.wcLabelText = wcText
     this.wcLabelBg = wcLabel
 
-    // 5 个隔间
+    // 女性/男性 标记
+    const wcWText = new Text({
+      text: '👩 女厕',
+      style: new TextStyle({
+        fontSize: 10, fill: 0xffffff, fontWeight: '700',
+        fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
+      }),
+    })
+    wcWText.position.set(170, 12)
+    map.addChild(wcWText)
+    const wcMText = new Text({
+      text: '👨 男厕',
+      style: new TextStyle({
+        fontSize: 10, fill: 0xffffff, fontWeight: '700',
+        fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
+      }),
+    })
+    wcMText.position.set(530, 12)
+    map.addChild(wcMText)
+
+    // 5 个隔间：前 3 女厕（粉色），后 2 男厕（蓝色）
     this.stallGraphics = []
     this.stallDoorGraphics = []
     const stallSpacing = 130
     const stallStartX = 200
     for (let i = 0; i < 5; i++) {
+      const isFemale = i < 3
       const cx = stallStartX + i * stallSpacing
+      const stallColor = isFemale ? 0xf0b8b8 : 0xb8c8f0
+      const stallStroke = isFemale ? 0xd89a9a : 0x8aa0d0
       // 隔间外框
       const stall = new Graphics()
       stall.roundRect(cx - 50, 36, 100, 56, 4)
-      stall.fill({ color: 0xe8e6e1, alpha: 0.85 })
-      stall.stroke({ color: 0xa8a39a, width: 1 })
+      stall.fill({ color: stallColor, alpha: 0.75 })
+      stall.stroke({ color: stallStroke, width: 1 })
       // 隔间中线
       stall.moveTo(cx, 36)
       stall.lineTo(cx, 92)
-      stall.stroke({ color: 0xa8a39a, width: 0.5, alpha: 0.7 })
+      stall.stroke({ color: stallStroke, width: 0.5, alpha: 0.5 })
       map.addChild(stall)
       this.stallGraphics.push(stall)
 

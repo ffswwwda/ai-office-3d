@@ -71,6 +71,7 @@ export const INITIAL_AGENTS: Agent[] = AGENT_ROSTER.map((entry, i) => {
     id: entry.id,
     name: entry.name,
     color: entry.color,
+    gender: (i < 3 ? 'female' : 'male') as 'female' | 'male',
     x: desk.seatX, y: desk.seatY,
     state: 'working' as AgentState,
     currentTask: entry.task,
