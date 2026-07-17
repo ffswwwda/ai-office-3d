@@ -678,7 +678,7 @@ export class OfficeScene {
       const entity = new AgentEntity(agent)
       this.agentEntities.set(agent.id, entity)
       entity.zIndex = agent.y
-      entity.on('pointertap', (event: FederatedPointerEvent) => {
+      entity.on('pointerdown', (event: FederatedPointerEvent) => {
         event.stopPropagation()
         this.options.onAgentClick?.({
           agent: { ...entity.data },
