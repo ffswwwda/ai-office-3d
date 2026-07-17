@@ -44,6 +44,12 @@ export class OfficeScene {
   private animation = new AnimationSystem()
   private simulator = new OfficeSimulator()
 
+  /** 每个 agent 的累计统计 */
+  private agentStats: Record<string, {
+    workSec: number; idleSec: number; chatSec: number; visitCount: number;
+    toiletCount: number; toiletTotalSec: number; visitReceiveCount: number
+  }> = {}
+
   private agents: Agent[] = INITIAL_AGENTS.map((a) => ({ ...a }))
   private autoWorkflowTimer = 0.8
   private autoWorkflowIndex = 0
@@ -204,8 +210,71 @@ export class OfficeScene {
     this.animation.update(this.agentEntities, dt)
     this.sortOfficeDepth()
     this.syncDeskOccupancy()
+    this.updateStats(dt)
 
     setOfficeAgents(this.agents)
+  }
+
+  /** 累加每个 agent 的工作/摸鱼/聊天/如厕秒数 */
+  private updateStats(dt: number) {
+    for (const a of this.agents) {
+      if (!this.agentStats[a.id]) {
+        this.agentStats[a.id] = {
+          workSec: 0, idleSec: 0, chatSec: 0, visitCount: 0,
+          toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0
+        }
+      }
+      const s = this.agentStats[a.id]
+      // 思考状态 = 在厕所蹲坑
+      const isToilet = a.bubbleText && a.bubbleText.indexOf('🚽') >= 0
+      if (isToilet) {
+        s.toiletTotalSec += dt
+      } else if (a.state === 'working' || a.state === 'thinking') {
+        s.workSec += dt
+      } else if (a.state === 'idle') {
+        s.idleSec += dt
+      } else if (a.state === 'talking') {
+        s.chatSec += dt
+      }
+      // 拜访计数（mission 启动时）
+      if (a.mission && a.mission.kind === 'desk_visit') {
+        s.visitCount += 1
+        s.visitReceiveCount += 0
+      }
+    }
+  }
+
+  /** 暴露统计给 React UI */
+  getAgentStats() {
+    return JSON.parse(JSON.stringify(this.agentStats))
+  }
+
+  /** 暴露 agent 中文名映射 */
+  getAgentNames() {
+    const map: Record<string, string> = {}
+    for (const a of this.agents) map[a.id] = a.name
+    return map
+  }
+
+  /** 触发一次厕所演示（点击门调用） */
+  triggerToiletDemo() {
+    // 找一个空闲 stall + 工作中的 agent
+    const freeStalls = this.stallOccupants.map((o, i) => o === null ? i : -1).filter(i => i >= 0)
+    if (freeStalls.length === 0) {
+      this.pushActivity('所有厕所都满了，等一会吧', 0xfbbf24)
+      return
+    }
+    const candidates = this.agents.filter(a => a.state === 'working' || a.state === 'idle')
+    if (candidates.length === 0) return
+    const agent = candidates[Math.floor(Math.random() * candidates.length)]
+    const stallIdx = freeStalls[Math.floor(Math.random() * freeStalls.length)]
+    const minutes = Math.random() < 0.5 ? (1 + Math.floor(Math.random() * 4)) : (10 + Math.floor(Math.random() * 25))
+    this.stallEntryTime[stallIdx] = minutes * 60
+    this.stallOccupants[stallIdx] = agent.id
+    this.walkAgentTo(agent.id, this.stallEntryPos(stallIdx), () => {
+      this.enterStall(stallIdx, agent.id, agent.name)
+    })
+    this.pushActivity(agent.name + ' 被派去上厕所（' + minutes + ' 分钟）', 0x4a90d9)
   }
 
   /** 厕所门位置：场景顶部中央 */
@@ -290,6 +359,12 @@ export class OfficeScene {
 
   /** 进入隔间：开门、进去 */
   private enterStall(stallIdx: number, agentId: string, agentName: string) {
+    // 累加上厕所次数
+    if (!this.agentStats[agentId]) {
+      this.agentStats[agentId] = { workSec: 0, idleSec: 0, chatSec: 0, visitCount: 0, toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0 }
+    }
+    this.agentStats[agentId].toiletCount += 1
+
     // 开门动画：填充半透明蓝色矩形
     const door = this.stallDoorGraphics[stallIdx]
     if (door) {
@@ -697,6 +772,9 @@ export class OfficeScene {
       }),
     })
     doorText.position.set(stallStartX - 70, 114)
+    doorText.eventMode = 'static'
+    doorText.cursor = 'pointer'
+    doorText.on('pointertap', () => this.triggerToiletDemo())
     map.addChild(doorText)
 
     // 左侧绿植

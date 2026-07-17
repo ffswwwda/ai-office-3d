@@ -81,16 +81,49 @@ export function OfficeHeaderStats() {
   )
 }
 
+type AgentStat = {
+  workSec: number; idleSec: number; chatSec: number; visitCount: number;
+  toiletCount: number; toiletTotalSec: number; visitReceiveCount: number
+}
+
+function fmtTime(sec: number) {
+  if (sec < 60) return Math.round(sec) + 's'
+  if (sec < 3600) return Math.floor(sec / 60) + 'm'
+  return Math.floor(sec / 3600) + 'h' + Math.floor((sec % 3600) / 60) + 'm'
+}
+
 export function OfficeRightPanel() {
   const [activities, setActivities] = useState<Array<{ text: string; color: number; time: string; ts: number }>>([])
+  const [stats, setStats] = useState<Record<string, AgentStat>>({})
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({})
 
   useEffect(() => {
     const handle = setInterval(() => {
       const scene = getOfficeScene()
-      if (scene) setActivities(scene.getActivityLog())
-    }, 800)
+      if (scene) {
+        setActivities(scene.getActivityLog())
+        setStats(scene.getAgentStats())
+        setAgentNames(scene.getAgentNames())
+      }
+    }, 1500)
     return () => clearInterval(handle)
   }, [])
+
+  // 排行榜
+  const ranking = (key: keyof AgentStat, limit = 3, formatter: (s: number) => string = fmtTime) => {
+    const items = Object.entries(stats)
+      .map(([id, s]) => ({ id, name: agentNames[id] || id, value: s[key] as number }))
+      .filter(x => x.value > 0)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, limit)
+    return items.map((x, i) => ({ ...x, rank: i + 1, display: formatter(x.value) }))
+  }
+
+  const topWorker = ranking('workSec', 3)
+  const topSlacker = ranking('idleSec', 3)
+  const topToilet = ranking('toiletCount', 3, v => v + ' 次')
+  const topChat = ranking('chatSec', 3)
+  const topVisit = ranking('visitCount', 3, v => v + ' 次')
 
   return (
     <aside className="office-right-panel">
@@ -103,6 +136,96 @@ export function OfficeRightPanel() {
               <strong>{t.label}</strong>
             </button>
           ))}
+        </div>
+      </div>
+      <div className="panel-section">
+        <h2>数据看板 <span style={{fontSize:10,color:'#0ea5e9',fontWeight:600,marginLeft:6}}>实时</span></h2>
+        <div className="stats-board">
+          <div className="stats-row" data-tone="cyan">
+            <div className="stats-row-icon">💼</div>
+            <div className="stats-row-body">
+              <div className="stats-row-title">最努力 Top 3</div>
+              <div className="stats-row-list">
+                {topWorker.length === 0 ? <span className="stats-row-empty">暂无数据</span> :
+                  topWorker.map(x => (
+                    <div key={x.id} className="stats-row-item">
+                      <span className="stats-rank" data-rank={x.rank}>{x.rank}</span>
+                      <span className="stats-name">{x.name}</span>
+                      <span className="stats-val">{x.display}</span>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+          <div className="stats-row" data-tone="orange">
+            <div className="stats-row-icon">🐟</div>
+            <div className="stats-row-body">
+              <div className="stats-row-title">最摸鱼 Top 3</div>
+              <div className="stats-row-list">
+                {topSlacker.length === 0 ? <span className="stats-row-empty">暂无数据</span> :
+                  topSlacker.map(x => (
+                    <div key={x.id} className="stats-row-item">
+                      <span className="stats-rank" data-rank={x.rank}>{x.rank}</span>
+                      <span className="stats-name">{x.name}</span>
+                      <span className="stats-val">{x.display}</span>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+          <div className="stats-row" data-tone="purple">
+            <div className="stats-row-icon">🚽</div>
+            <div className="stats-row-body">
+              <div className="stats-row-title">上厕所最多 Top 3</div>
+              <div className="stats-row-list">
+                {topToilet.length === 0 ? <span className="stats-row-empty">暂无数据</span> :
+                  topToilet.map(x => (
+                    <div key={x.id} className="stats-row-item">
+                      <span className="stats-rank" data-rank={x.rank}>{x.rank}</span>
+                      <span className="stats-name">{x.name}</span>
+                      <span className="stats-val">{x.display}</span>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+          <div className="stats-row" data-tone="green">
+            <div className="stats-row-icon">💬</div>
+            <div className="stats-row-body">
+              <div className="stats-row-title">最爱聊天 Top 3</div>
+              <div className="stats-row-list">
+                {topChat.length === 0 ? <span className="stats-row-empty">暂无数据</span> :
+                  topChat.map(x => (
+                    <div key={x.id} className="stats-row-item">
+                      <span className="stats-rank" data-rank={x.rank}>{x.rank}</span>
+                      <span className="stats-name">{x.name}</span>
+                      <span className="stats-val">{x.display}</span>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+          <div className="stats-row" data-tone="pink">
+            <div className="stats-row-icon">🚶</div>
+            <div className="stats-row-body">
+              <div className="stats-row-title">串门最多 Top 3</div>
+              <div className="stats-row-list">
+                {topVisit.length === 0 ? <span className="stats-row-empty">暂无数据</span> :
+                  topVisit.map(x => (
+                    <div key={x.id} className="stats-row-item">
+                      <span className="stats-rank" data-rank={x.rank}>{x.rank}</span>
+                      <span className="stats-name">{x.name}</span>
+                      <span className="stats-val">{x.display}</span>
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div className="panel-section panel-grow">
