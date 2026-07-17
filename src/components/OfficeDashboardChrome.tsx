@@ -253,7 +253,7 @@ export function OfficeRightPanel() {
 
 export function OfficeBottomToolbar() {
   const [paused, setPaused] = useState(false)
-  const [speed, setSpeed] = useState(100)
+  const [speed, setSpeed] = useState(1)
   const [phase, setPhase] = useState<'day' | 'dusk' | 'night'>('day')
   const [hudTime, setHudTime] = useState('09:00')
 

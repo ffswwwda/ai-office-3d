@@ -54,7 +54,7 @@ export class OfficeScene {
   private autoWorkflowTimer = 0.8
   private autoWorkflowIndex = 0
   private paused = false
-  private speed = 100
+  private speed = 1
   /** 模拟时间（秒，0-86400），从 9:00 开始，1×=1秒/秒，100×=100秒/秒 */
   private simTime = 9 * 3600
   /** 夜晚遮罩 */
@@ -565,7 +565,7 @@ export class OfficeScene {
   setSpeed(s: number) { this.speed = s }
   reset() {
     this.simTime = 9 * 3600
-    this.speed = 100
+    this.speed = 1
     this.paused = false
     this.agents = INITIAL_AGENTS.map((a) => ({ ...a }))
     this.autoWorkflowIndex = 0
@@ -738,43 +738,51 @@ export class OfficeScene {
     leftWall.stroke({ color: 0xd8d4cc, width: 1, alpha: 0.4 })
     map.addChild(leftWall)
 
-    // 厕所区：5 个隔间 + 1 个门（场景顶部 0-100px 区域）
-    // 「厕所」标签
+    // 厕所区：5 个隔间（女厕前 3 / 男厕后 2）
+    // 顶部整体标识「厕所区」
     const wcLabel = new Graphics()
-    wcLabel.roundRect(60, 8, 70, 18, 4)
-    wcLabel.fill({ color: 0x4a90d9, alpha: 0.9 })
-    wcLabel.stroke({ color: 0x4a90d9, width: 0.5 })
+    wcLabel.roundRect(40, 6, 90, 22, 4)
+    wcLabel.fill({ color: 0x14162a, alpha: 0.85 })
+    wcLabel.stroke({ color: 0x00d4ff, width: 1 })
     map.addChild(wcLabel)
     const wcText = new Text({
-      text: '🚻 厕所',
+      text: '厕所区',
+      style: new TextStyle({
+        fontSize: 11, fill: 0x00d4ff, fontWeight: '700',
+        fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
+      }),
+    })
+    wcText.position.set(60, 11)
+    map.addChild(wcText)
+
+    // 女性/男性 标记（带色块底）
+    const wcWLabel = new Graphics()
+    wcWLabel.roundRect(160, 6, 110, 22, 4)
+    wcWLabel.fill({ color: 0xe91e63, alpha: 0.95 })
+    wcWLabel.stroke({ color: 0xff6b9d, width: 1 })
+    map.addChild(wcWLabel)
+    const wcWText = new Text({
+      text: '女厕 · WOMEN',
       style: new TextStyle({
         fontSize: 11, fill: 0xffffff, fontWeight: '700',
         fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
       }),
     })
-    wcText.position.set(72, 12)
-    map.addChild(wcText)
-    this.wcLabelText = wcText
-    this.wcLabelBg = wcLabel
-
-    // 女性/男性 标记
-    const wcWText = new Text({
-      text: '👩 女厕',
-      style: new TextStyle({
-        fontSize: 10, fill: 0xffffff, fontWeight: '700',
-        fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
-      }),
-    })
-    wcWText.position.set(170, 12)
+    wcWText.position.set(168, 11)
     map.addChild(wcWText)
+    const wcMLabel = new Graphics()
+    wcMLabel.roundRect(450, 6, 110, 22, 4)
+    wcMLabel.fill({ color: 0x4a90d9, alpha: 0.95 })
+    wcMLabel.stroke({ color: 0x0ea5e9, width: 1 })
+    map.addChild(wcMLabel)
     const wcMText = new Text({
-      text: '👨 男厕',
+      text: '男厕 · MEN',
       style: new TextStyle({
-        fontSize: 10, fill: 0xffffff, fontWeight: '700',
+        fontSize: 11, fill: 0xffffff, fontWeight: '700',
         fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
       }),
     })
-    wcMText.position.set(530, 12)
+    wcMText.position.set(458, 11)
     map.addChild(wcMText)
 
     // 5 个隔间：前 3 女厕（粉色），后 2 男厕（蓝色）
