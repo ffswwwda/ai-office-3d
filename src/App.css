@@ -166,6 +166,8 @@
   color: var(--ink-2);
   font-size: 13px;
 }
+.agent-row.clickable { cursor: pointer; border-radius: 8px; transition: background .15s; }
+.agent-row.clickable:hover { background: rgba(168,85,247,.08); color: var(--ink); }
 
 .agent-dot {
   width: 7px;
@@ -785,6 +787,41 @@
 .ac-state-btn:hover { border-color: #34c759; color: #34c759; background: rgba(52, 199, 89, 0.08); }
 
 .ac-report-item { font-size: 11.5px; color: var(--ink-2); display: flex; align-items: flex-start; gap: 6px; padding: 4px 0; line-height: 1.5; }
+
+/* 数字员工招募入口（3D 办公室 → 招募区深链） */
+.ac-recruit-tip { font-size: 11.5px; color: var(--ink-2); line-height: 1.55; margin: 4px 0 9px; }
+.ac-recruit-btn {
+  width: 100%; border: 1px solid transparent; border-radius: 9px; padding: 10px 12px;
+  font-size: 12px; font-weight: 700; cursor: pointer; text-decoration: none;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  color: #fff; background: linear-gradient(135deg, #00d4ff, #a855f7 55%, #ff6b9d);
+  box-shadow: 0 6px 18px rgba(168,85,247,0.28); transition: transform .15s, box-shadow .15s;
+}
+.ac-recruit-btn:hover { transform: translateY(-1px); box-shadow: 0 9px 24px rgba(168,85,247,0.4); }
+.ac-recruit-btn svg { width: 14px; height: 14px; }
+
+/* 自我介绍 persona block */
+.ac-intro {
+  background: linear-gradient(135deg, rgba(0,212,255,0.08), rgba(168,85,247,0.08));
+  border-left: 3px solid transparent; border-image: linear-gradient(180deg,#00d4ff,#a855f7) 1;
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
+}
+.ac-intro-hi { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 5px; }
+.ac-intro-body { font-size: 12px; line-height: 1.62; color: var(--ink-2); margin: 0; }
+
+/* 实时工作状态（上班 / 工作 / 摸鱼） */
+.ac-ws-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.ac-ws-cell {
+  background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; display: flex; flex-direction: column; gap: 2px;
+}
+.ac-ws-k { font-size: 10.5px; color: var(--ink-2); opacity: .75; }
+.ac-ws-v { font-size: 12px; font-weight: 600; color: var(--ink); }
+.ac-ws-work { color: #34c759; }
+.ac-ws-idle { color: #f97316; }
+.ac-ws-recent { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 92px; overflow-y: auto; }
+.ac-ws-log { font-size: 11px; color: var(--ink-2); line-height: 1.4; display: flex; gap: 6px; }
+.ac-ws-time { color: var(--ink-2); opacity: .6; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 1180px) {
   .office-sidebar { width: 210px; }

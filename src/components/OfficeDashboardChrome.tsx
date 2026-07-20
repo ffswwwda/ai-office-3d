@@ -8,7 +8,17 @@ function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
   return <svg viewBox="0 0 24 24" width={size} height={size}><use href={'#' + id}/></svg>
 }
 
-export function OfficeSidebar() {
+export function OfficeSidebar({ onAgentClick, activeNav, onNavChange }: {
+  onAgentClick?: (agentId: string) => void
+  activeNav?: string
+  onNavChange?: (label: string) => void
+}) {
+  const navItems = [
+    { label: '办公室', icon: 'i-office', badge: '7' },
+    { label: '概览', icon: 'i-eye' },
+    { label: '项目', icon: 'i-folder' },
+    { label: '成员', icon: 'i-users' },
+  ]
   return (
     <aside className="office-sidebar">
       <div className="sidebar-brand">
@@ -21,17 +31,23 @@ export function OfficeSidebar() {
         <kbd>⌘K</kbd>
       </div>
       <nav className="sidebar-nav">
-        {[{ label: '办公室', icon: 'i-office' }, { label: '概览', icon: 'i-eye' }, { label: '项目', icon: 'i-folder' }, { label: '成员', icon: 'i-users' }].map(({ label, icon }) => (
-          <button key={label} type="button" className={`nav-item ${label === '办公室' ? 'active' : ''}`}>
+        {navItems.map(({ label, icon, badge }) => (
+          <button key={label} type="button"
+            className={`nav-item ${(activeNav||'办公室') === label ? 'active' : ''}`}
+            onClick={() => onNavChange?.(label)}
+          >
             <span className="nav-main"><span className="nav-icon"><SvgIcon id={icon} size={14}/></span><span>{label}</span></span>
-            {label === '办公室' && <span className="nav-badge">7</span>}
+            {badge && <span className="nav-badge">{badge}</span>}
           </button>
         ))}
       </nav>
       <div className="sidebar-section">
         <div className="section-title">团队成员</div>
         {AGENT_ROSTER.map((r) => (
-          <div key={r.id} className="agent-row">
+          <div key={r.id} className="agent-row clickable"
+            onClick={() => onAgentClick?.(r.id)}
+            title={'点击查看 '+r.name+' 的档案'}
+          >
             <span className="agent-dot online" />
             <span style={{ flex: 1 }}>{r.name}</span>
             <span style={{ color: '#999', fontSize: 11 }}>{r.task}</span>

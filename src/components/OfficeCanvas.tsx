@@ -100,12 +100,27 @@ function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
   return <svg viewBox="0 0 24 24" width={size} height={size}><use href={'#' + id}/></svg>
 }
 
+interface WorkStatus {
+  clockIn: string; now: string; state: string
+  workSec: number; idleSec: number; chatSec: number
+  toiletCount: number; toiletTotalSec: number; visitCount: number
+  recent: { text: string; time: string }[]
+}
+
+function fmtSec(s: number) {
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  const mm = m % 60
+  return h > 0 ? `${h}h${mm}m` : `${mm}m`
+}
+
 export function OfficeCanvas() {
   const hostRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<OfficeScene | null>(null)
   const readyRef = useRef(false)
   const [menu, setMenu] = useState<AgentMenuState | null>(null)
   const [detailTab, setDetailTab] = useState<'profile' | 'work' | 'actions'>('profile')
+  const [workStatus, setWorkStatus] = useState<WorkStatus | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -123,6 +138,7 @@ export function OfficeCanvas() {
         agents: sceneRef.current?.getAgents() ?? [],
         pickingTarget: false,
       })
+      setWorkStatus(sceneRef.current?.getAgentWorkStatus(event.agent.id) ?? null)
     }
     const scene = new OfficeScene({ onAgentClick: handleAgentClick })
     sceneRef.current = scene
@@ -152,6 +168,43 @@ export function OfficeCanvas() {
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', key)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key) }
+  }, [menu])
+
+  // 监听侧边栏员工点击事件（CustomEvent 从 OfficeSidebar 发出）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const d = (e as CustomEvent).detail
+      if (!d?.agentId || !sceneRef.current) return
+      const agents = sceneRef.current.getAgents()
+      const target = agents.find((a: Agent) => a.id === d.agentId)
+      if (!target) return
+      setDetailTab('profile')
+      const host = hostRef.current!
+      const rect = host.getBoundingClientRect()
+      const mw = 310
+      setMenu({
+        agent: target,
+        rosterNo: 0,
+        x: Math.max(12, rect.width - mw - 24),
+        y: Math.max(12, 80),
+        agents,
+        pickingTarget: false,
+      })
+      setWorkStatus(sceneRef.current!.getAgentWorkStatus(d.agentId) ?? null)
+    }
+    window.addEventListener('office:agent-click', handler)
+    return () => window.removeEventListener('office:agent-click', handler)
+  }, [])
+
+  // 员工卡打开时，实时刷新工作状态（上班/工作/摸鱼）
+  useEffect(() => {
+    if (!menu) { setWorkStatus(null); return }
+    const id = menu.agent.id
+    const t = setInterval(() => {
+      const st = sceneRef.current?.getAgentWorkStatus(id)
+      if (st) setWorkStatus(st)
+    }, 1500)
+    return () => clearInterval(t)
   }, [menu])
 
   const applyState = (state: AgentState, task?: string) => {
@@ -201,7 +254,32 @@ export function OfficeCanvas() {
           <div className="ac-body">
             {detailTab === 'profile' && (
               <div className="ac-profile">
-                <p className="ac-desc">{profile.desc}</p>
+                {/* 自我介绍：第一人称带入 */}
+                <div className="ac-intro">
+                  <div className="ac-intro-hi">你好，我是 <b>{menu.agent.name}</b></div>
+                  <p className="ac-intro-body">{profile.desc}</p>
+                </div>
+                {/* 实时工作状态：上班 / 工作 / 摸鱼 */}
+                {workStatus && (
+                  <div className="ac-section ac-ws">
+                    <div className="ac-section-title"><SvgIcon id="i-refresh" size={12}/> 今日工作状态（实时）</div>
+                    <div className="ac-ws-grid">
+                      <div className="ac-ws-cell"><span className="ac-ws-k">上班</span><span className="ac-ws-v">{workStatus.clockIn} 起 · 现在 {workStatus.now}</span></div>
+                      <div className="ac-ws-cell"><span className="ac-ws-k">当下</span><span className="ac-ws-v">{workStatus.state}</span></div>
+                      <div className="ac-ws-cell"><span className="ac-ws-k">工作</span><span className="ac-ws-v ac-ws-work">{fmtSec(workStatus.workSec)}</span></div>
+                      <div className="ac-ws-cell"><span className="ac-ws-k">摸鱼</span><span className="ac-ws-v ac-ws-idle">{fmtSec(workStatus.idleSec)}</span></div>
+                      <div className="ac-ws-cell"><span className="ac-ws-k">串门</span><span className="ac-ws-v">{fmtSec(workStatus.chatSec)} · {workStatus.visitCount} 次</span></div>
+                      <div className="ac-ws-cell"><span className="ac-ws-k">如厕</span><span className="ac-ws-v">{workStatus.toiletCount} 次 / {fmtSec(workStatus.toiletTotalSec)}</span></div>
+                    </div>
+                    {workStatus.recent.length > 0 && (
+                      <div className="ac-ws-recent">
+                        {workStatus.recent.map((r, i) => (
+                          <div key={i} className="ac-ws-log"><span className="ac-ws-time">{r.time}</span>{r.text}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="ac-section">
                   <div className="ac-section-title"><SvgIcon id="i-target" size={12}/> 擅长类目</div>
                   <div className="ac-tags">{profile.category.split('、').map((c,i) => <span key={i} className="ac-tag">{c}</span>)}</div>
@@ -265,6 +343,18 @@ export function OfficeCanvas() {
                 <div className="ac-section">
                   <div className="ac-section-title"><SvgIcon id="i-doc" size={12}/> 报告与入口</div>
                   <div className="ac-report-item"><SvgIcon id="i-bar" size={12}/> {profile.reports}</div>
+                </div>
+                <div className="ac-section">
+                  <div className="ac-section-title"><SvgIcon id="i-bot" size={12}/> 数字员工招募</div>
+                  <p className="ac-text ac-recruit-tip">在「数字员工招募区」把 {menu.agent.name} 的知识库 + 技能 + system prompt 打包成 .zip，交给你的 AI 就地上岗。</p>
+                  <a
+                    className="ac-recruit-btn"
+                    href={`https://ffswwwda.github.io/category-insight-hub/category-insight-hub.html?emp=${menu.agent.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <SvgIcon id="i-bot" size={14}/> 去招募 {menu.agent.name}（打包 .zip）
+                  </a>
                 </div>
               </div>
             )}
