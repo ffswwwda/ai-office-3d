@@ -15,7 +15,7 @@ const STATE_ACTIONS: Array<{ label: string; state: AgentState; task?: string }> 
 
 /** 每个 agent 的「身份卡」数据 */
 const AGENT_PROFILES: Record<string, {
-  name: string; role: string; emoji: string;
+  name: string; role: string; icon: string;
   desc: string;
   category: string;
   methods: string[];
@@ -25,7 +25,7 @@ const AGENT_PROFILES: Record<string, {
   sources: string;
 }> = {
   voc: {
-    name:'小灵', role:'VOC 智能打标', emoji:'🏷',
+    name:'小灵', role:'VOC 智能打标', icon:'w-tag',
     desc:'我负责给用户评论打维度标签——动机、场景、痛点，一条评论穿过 9 道标签墙，盖上属于它的印章。',
     category:'飞机杯、震动棒、润滑液等成人用品类目',
     methods:['规则引擎打标','9 维度标签体系','否定保护校验','频率统计与情感分析'],
@@ -35,7 +35,7 @@ const AGENT_PROFILES: Record<string, {
     sources:'亚马逊评论·DE/US/JP/UK/EU'
   },
   score: {
-    name:'小分', role:'产品需求打分', emoji:'🎯',
+    name:'小分', role:'产品需求打分', icon:'w-target',
     desc:'我帮产品需求做四维评分——痛点匹配、技术可行、市场机会、竞争差异。每项附理由与置信度。',
     category:'新产品概念、功能改进、产品线扩展',
     methods:['四象限评分模型','关键词权重打分','置信度评估','可溯源证据链'],
@@ -45,7 +45,7 @@ const AGENT_PROFILES: Record<string, {
     sources:'德国商品库·DE、竞品分析·DE/US'
   },
   lab: {
-    name:'小预', role:'数字世界预测', emoji:'🔮',
+    name:'小预', role:'数字世界预测', icon:'w-globe',
     desc:'我用多智能体仿真推演你的运营策略——把你真实的用户分群放进数字沙盒，注入定价、卖点、渠道变量，观察群体演化。',
     category:'社媒活动预测、新品上市预测、品类机会评估',
     methods:['Agent-Based Model','Hegselmann-Krause 观点演化','蒙特卡洛复算','三场景差异化输出'],
@@ -55,7 +55,7 @@ const AGENT_PROFILES: Record<string, {
     sources:'NS 社媒内容台、用户画像/领新数据、类目趋势·EU/US'
   },
   dev: {
-    name:'小创', role:'新品开发盲盒', emoji:'🎲',
+    name:'小创', role:'新品开发盲盒', icon:'w-box',
     desc:'我负责把创新方法装进盲盒——抽中 TRIZ 就给你物场分析，抽中 SCAMPER 就做替代/组合变形。每个方法长出 3 条产品开发创意。',
     category:'飞机杯、震动棒等类目的产品创新',
     methods:['TRIZ 40 发明原理','SCAMPER 变形法','物场分析与标准解','语义组合引擎'],
@@ -65,7 +65,7 @@ const AGENT_PROFILES: Record<string, {
     sources:'用户访谈、竞品分析·DE/US、搜索数据·DE/US/JP'
   },
   idea: {
-    name:'小设', role:'新品创意图', emoji:'⛏',
+    name:'小设', role:'新品创意图', icon:'w-layers',
     desc:'我是矿工——从六维创意矿脉（外观/功能/场景/情感/技术/叙事）里挖金块，拼成一张可执行的创意图。',
     category:'成人用品类目外观设计、使用场景创新',
     methods:['六维创意生成','场景情感映射','技术趋势导入','叙事包装'],
@@ -75,7 +75,7 @@ const AGENT_PROFILES: Record<string, {
     sources:'社媒声量·全球、用户访谈、领新用户反馈'
   },
   stress: {
-    name:'小测', role:'虚拟压力测试', emoji:'🔬',
+    name:'小测', role:'虚拟压力测试', icon:'w-robot',
     desc:'我把你的产品概念丢进虚拟用户群——有人支持、有人反对、有人沉默。我找出最极端的反对声音，帮你提前发现翻车风险。',
     category:'新品概念验证、运营活动压力、文案挑刺',
     methods:['虚拟用户群生成','压力测试仿真','极端用户识别（von Hippel）','立场与影响分析'],
@@ -85,7 +85,7 @@ const AGENT_PROFILES: Record<string, {
     sources:'社媒声量·全球、品类洞察、产品运营看板'
   },
   pr: {
-    name:'小展', role:'原理展厅', emoji:'🏛',
+    name:'小展', role:'原理展厅', icon:'w-office',
     desc:'我管理原理展厅——所有工具的「使用」和「看背后工作」双视角演示都存储在我这里。你想看什么工具怎么运转，我来展示。',
     category:'全品类工具原理与演示',
     methods:['原理全景图','双视角切换（使用/原理）','动画演示引擎'],
@@ -174,8 +174,8 @@ export function OfficeCanvas() {
         <div className="agent-card" ref={menuRef} style={{ left: menu.x, top: menu.y }}>
           {/* 头部 */}
           <div className="ac-head">
-            <div className="ac-avatar" style={{ background: 'linear-gradient(135deg,#00d4ff,#a855f7 55%,#ff6b9d)' }}>
-              {profile.emoji}
+            <div className="ac-avatar" style={{ background: 'linear-gradient(135deg,#00d4ff,#a855f7 55%,#ff6b9d)', color: '#fff' }}>
+              <SvgIcon id={profile.icon} size={20}/>
             </div>
             <div className="ac-head-info">
               <div className="ac-head-name">{menu.agent.name} · {profile.role}</div>

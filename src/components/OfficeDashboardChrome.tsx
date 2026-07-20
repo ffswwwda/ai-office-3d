@@ -146,7 +146,7 @@ export function OfficeRightPanel() {
         <h2>数据看板 <span style={{fontSize:10,color:'#0ea5e9',fontWeight:600,marginLeft:6}}>实时</span></h2>
         <div className="stats-board">
           <div className="stats-row" data-tone="cyan">
-            <div className="stats-row-icon">💼</div>
+            <div className="stats-row-icon"><SvgIcon id="i-brief" size={16}/></div>
             <div className="stats-row-body">
               <div className="stats-row-title">最努力 Top 3</div>
               <div className="stats-row-list">
@@ -163,7 +163,7 @@ export function OfficeRightPanel() {
             </div>
           </div>
           <div className="stats-row" data-tone="orange">
-            <div className="stats-row-icon">🐟</div>
+            <div className="stats-row-icon"><SvgIcon id="i-fish" size={16}/></div>
             <div className="stats-row-body">
               <div className="stats-row-title">最摸鱼 Top 3</div>
               <div className="stats-row-list">
@@ -180,7 +180,7 @@ export function OfficeRightPanel() {
             </div>
           </div>
           <div className="stats-row" data-tone="purple">
-            <div className="stats-row-icon">🚽</div>
+            <div className="stats-row-icon"><SvgIcon id="i-toilet" size={16}/></div>
             <div className="stats-row-body">
               <div className="stats-row-title">上厕所最多 Top 3</div>
               <div className="stats-row-list">
@@ -214,7 +214,7 @@ export function OfficeRightPanel() {
             </div>
           </div>
           <div className="stats-row" data-tone="pink">
-            <div className="stats-row-icon">🚶</div>
+            <div className="stats-row-icon"><SvgIcon id="i-walk" size={16}/></div>
             <div className="stats-row-body">
               <div className="stats-row-title">串门最多 Top 3</div>
               <div className="stats-row-list">
@@ -311,7 +311,7 @@ export function OfficeBottomToolbar() {
       <div className="toolbar-inner">
         <span className="toolbar-hud">
           <span className="toolbar-time">{hudTime}</span>
-          <span className="toolbar-phase" data-phase={phase}>{phase === 'day' ? '☀' : phase === 'dusk' ? '🌆' : '🌙'}</span>
+          <span className="toolbar-phase" data-phase={phase}>{phase === 'day' ? <SvgIcon id="i-sun" size={14}/> : phase === 'dusk' ? <SvgIcon id="i-dusk" size={14}/> : <SvgIcon id="i-moon" size={14}/>}</span>
           <span className="toolbar-speed" onClick={handleSpeed} title="点击切换时间流速">{speed}×</span>
         </span>
         <button type="button" className="toolbar-btn" onClick={handlePause} title={paused ? '继续' : '暂停'}>

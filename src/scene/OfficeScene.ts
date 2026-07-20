@@ -226,7 +226,7 @@ export class OfficeScene {
       }
       const s = this.agentStats[a.id]
       // 思考状态 = 在厕所蹲坑
-      const isToilet = a.bubbleText && a.bubbleText.indexOf('🚽') >= 0
+      const isToilet = a.bubbleText && a.bubbleText.indexOf('WC') >= 0 // 厕所气泡标识（见下方 'WC' 文本）
       if (isToilet) {
         s.toiletTotalSec += dt
       } else if (a.state === 'working' || a.state === 'thinking') {
@@ -341,12 +341,12 @@ export class OfficeScene {
 
     // 走错了：快速进去又出来
     if (isWrongToilet) {
-      this.pushActivity('😱 ' + agent.name + ' 走错了厕所！男/女不分了？', 0xef4444)
+      this.pushActivity('走错厕所！' + agent.name + ' 男/女不分了？', 0xef4444)
       this.walkAgentTo(agent.id, this.stallEntryPos(stallIdx), () => {
         // 进去 3 秒就出来，退还到门口
         setTimeout(() => {
           this.exitStall(stallIdx, agent.id)
-          this.agents.find(x => x.id === agent.id)!.bubbleText = '😰 走错了走错了…'
+          this.agents.find(x => x.id === agent.id)!.bubbleText = '走错了走错了…'
           this.pushDataToEntities()
           // 清除占用
           this.stallOccupants[stallIdx] = null
@@ -373,7 +373,7 @@ export class OfficeScene {
     a.walkPath = undefined
     a.walkPathIndex = undefined
     a.currentTask = undefined
-    a.bubbleText = '🚻'
+    a.bubbleText = 'WC'
     this.pushDataToEntities()
     // 注册一次性监听：等走到位置
     const checkArrive = setInterval(() => {
@@ -418,7 +418,7 @@ export class OfficeScene {
         a.state = 'thinking'  // 用 thinking 状态表示蹲着
         a.viewFacing = 'back' as any
         a.facing = 1
-        a.bubbleText = '🚽 ' + Math.round((this.stallEntryTime[stallIdx] || 0) / 60) + '分钟'
+        a.bubbleText = 'WC ' + Math.round((this.stallEntryTime[stallIdx] || 0) / 60) + '分钟'
         // 关上门
         if (door) {
           door.clear()
@@ -449,7 +449,7 @@ export class OfficeScene {
         // 更新气泡
         const a = this.agents.find(x => x.id === occ)
         if (a && a.bubbleText) {
-          a.bubbleText = '🚽 还剩 ' + Math.ceil(remaining / 60) + '分钟'
+          a.bubbleText = 'WC 还剩 ' + Math.ceil(remaining / 60) + '分钟'
         }
       }
     }
@@ -473,7 +473,7 @@ export class OfficeScene {
       // agent 出来走到门口
       a.x = this.stallEntryPos(stallIdx).x
       a.y = this.stallEntryPos(stallIdx).y
-      a.bubbleText = '😌 终于出来了'
+      a.bubbleText = '终于出来了'
       this.pushDataToEntities()
       this.pushActivity(a.name + ' 上完厕所出来（用了 ' + Math.round(((this.stallEntryTime[stallIdx] || 0) + 1) / 60) + ' 分钟）', 0x34c759)
       // 关上门
@@ -829,7 +829,7 @@ export class OfficeScene {
     doorSign.fill({ color: 0x4a90d9, alpha: 0.85 })
     map.addChild(doorSign)
     const doorText = new Text({
-      text: '🚪 厕所入口（点击观察）',
+      text: '厕所入口（点击观察）',
       style: new TextStyle({
         fontSize: 10, fill: 0xffffff, fontWeight: '600',
         fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
