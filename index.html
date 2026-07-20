@@ -4,30 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI 办公全景 · 3D 办公室</title>
-    <link rel="icon" type="image/svg+xml" href="./assets/favicon-9eGGqFSa-9eGGqFSa.svg"/>
-    <link rel="modulepreload" crossorigin href="./assets/Geometry-DN95BC3H-CbnUCwj0-CbnUCwj0.js">
-    <link rel="modulepreload" crossorigin href="./assets/Filter-CGNxNgYD-C5pigb9J-C5pigb9J.js">
-    <link rel="modulepreload" crossorigin href="./assets/canvasUtils-DFSMh9db-DpsN4eYX-DpsN4eYX.js">
-    <link rel="modulepreload" crossorigin href="data:text/javascript;base64,aW1wb3J0e3YgYXMgZX1mcm9tIi4vR2VvbWV0cnktRE45NUJDM0guanMiO3ZhciB0PShlLHQsbj0hMSk9PihBcnJheS5pc0FycmF5KGUpfHwoZT1bZV0pLHQ/ZS5tYXAoZT0+dHlwZW9mIGU9PWBzdHJpbmdgfHxuP3QoZSk6ZSk6ZSksbj1uZXcgY2xhc3N7Y29uc3RydWN0b3IoKXt0aGlzLl9wYXJzZXJzPVtdLHRoaXMuX2NhY2hlPW5ldyBNYXAsdGhpcy5fY2FjaGVNYXA9bmV3IE1hcH1yZXNldCgpe3RoaXMuX2NhY2hlTWFwLmNsZWFyKCksdGhpcy5fY2FjaGUuY2xlYXIoKX1oYXMoZSl7cmV0dXJuIHRoaXMuX2NhY2hlLmhhcyhlKX1nZXQodCl7bGV0IG49dGhpcy5fY2FjaGUuZ2V0KHQpO3JldHVybiBufHxlKGBbQXNzZXRzXSBBc3NldCBpZCAke3R9IHdhcyBub3QgZm91bmQgaW4gdGhlIENhY2hlYCksbn1zZXQobixyKXtsZXQgaT10KG4pLGE7Zm9yKGxldCBlPTA7ZTx0aGlzLnBhcnNlcnMubGVuZ3RoO2UrKyl7bGV0IHQ9dGhpcy5wYXJzZXJzW2VdO2lmKHQudGVzdChyKSl7YT10LmdldENhY2hlYWJsZUFzc2V0cyhpLHIpO2JyZWFrfX1sZXQgbz1uZXcgTWFwKE9iamVjdC5lbnRyaWVzKGF8fHt9KSk7YXx8aS5mb3JFYWNoKGU9PntvLnNldChlLHIpfSk7bGV0IHM9Wy4uLm8ua2V5cygpXSxjPXtjYWNoZUtleXM6cyxrZXlzOml9O2kuZm9yRWFjaChlPT57dGhpcy5fY2FjaGVNYXAuc2V0KGUsYyl9KSxzLmZvckVhY2godD0+e2xldCBuPWE/YVt0XTpyO3RoaXMuX2NhY2hlLmhhcyh0KSYmdGhpcy5fY2FjaGUuZ2V0KHQpIT09biYmZShgW0NhY2hlXSBhbHJlYWR5IGhhcyBrZXk6YCx0KSx0aGlzLl9jYWNoZS5zZXQodCxvLmdldCh0KSl9KX1yZW1vdmUodCl7aWYoIXRoaXMuX2NhY2hlTWFwLmhhcyh0KSl7ZShgW0Fzc2V0c10gQXNzZXQgaWQgJHt0fSB3YXMgbm90IGZvdW5kIGluIHRoZSBDYWNoZWApO3JldHVybn1sZXQgbj10aGlzLl9jYWNoZU1hcC5nZXQodCk7bi5jYWNoZUtleXMuZm9yRWFjaChlPT57dGhpcy5fY2FjaGUuZGVsZXRlKGUpfSksbi5rZXlzLmZvckVhY2goZT0+e3RoaXMuX2NhY2hlTWFwLmRlbGV0ZShlKX0pfWdldCBwYXJzZXJzKCl7cmV0dXJuIHRoaXMuX3BhcnNlcnN9fTtleHBvcnR7dCBhcyBuLG4gYXMgdH07">
-    <link rel="modulepreload" crossorigin href="./assets/getPo2TextureFromSource-DxkNBneN-B5H2Mv6u-B5H2Mv6u.js">
-    <link rel="modulepreload" crossorigin href="./assets/GCManagedHash-invItQJA-EJQ2mt0U-EJQ2mt0U.js">
-    <link rel="modulepreload" crossorigin href="./assets/RenderTargetSystem-CS7cWSjg-yNB7jYnX-yNB7jYnX.js">
-    <link rel="modulepreload" crossorigin href="data:text/javascript;base64,aW1wb3J0e28gYXMgZSx4IGFzIHR9ZnJvbSIuL0dlb21ldHJ5LUROOTVCQzNILmpzIjt2YXIgbj17fTtmdW5jdGlvbiByKGUsdCxyKXtsZXQgYT0yMTY2MTM2MjYxO2ZvcihsZXQgbj0wO248dDtuKyspYV49ZVtuXS51aWQsYT1NYXRoLmltdWwoYSwxNjc3NzYxOSksYT4+Pj0wO3JldHVybiBuW2FdfHxpKGUsdCxhLHIpfWZ1bmN0aW9uIGkocixpLGEsbyl7bGV0IHM9e30sYz0wO2ZvcihsZXQgZT0wO2U8bztlKyspe2xldCBuPWU8aT9yW2VdOnQuRU1QVFkuc291cmNlO3NbYysrXT1uLnNvdXJjZSxzW2MrK109bi5zdHlsZX1sZXQgbD1uZXcgZShzKTtyZXR1cm4gblthXT1sLGx9ZXhwb3J0e3IgYXMgdH07">
-    <link rel="modulepreload" crossorigin href="./assets/GraphicsContext-BGQEimyw-BQo3gpbh-BQo3gpbh.js">
-    <link rel="modulepreload" crossorigin href="data:text/javascript;base64,aW1wb3J0e0QgYXMgZSxfIGFzIHQscCBhcyBufWZyb20iLi9HZW9tZXRyeS1ETjk1QkMzSC5qcyI7dmFyIHI9bmV3IGNsYXNze2NvbnN0cnVjdG9yKGUpe3RoaXMuX2NhbnZhc1Bvb2w9T2JqZWN0LmNyZWF0ZShudWxsKSx0aGlzLmNhbnZhc09wdGlvbnM9ZXx8e30sdGhpcy5lbmFibGVGdWxsU2NyZWVuPSExfV9jcmVhdGVDYW52YXNBbmRDb250ZXh0KGUsdCl7bGV0IHI9bi5nZXQoKS5jcmVhdGVDYW52YXMoKTtyZXR1cm4gci53aWR0aD1lLHIuaGVpZ2h0PXQse2NhbnZhczpyLGNvbnRleHQ6ci5nZXRDb250ZXh0KGAyZGApfX1nZXRPcHRpbWFsQ2FudmFzQW5kQ29udGV4dCh0LG4scj0xKXt0PU1hdGguY2VpbCh0KnItMWUtNiksbj1NYXRoLmNlaWwobipyLTFlLTYpLHQ9ZSh0KSxuPWUobik7bGV0IGk9KHQ8PDE3KSsobjw8MSk7dGhpcy5fY2FudmFzUG9vbFtpXXx8KHRoaXMuX2NhbnZhc1Bvb2xbaV09W10pO2xldCBhPXRoaXMuX2NhbnZhc1Bvb2xbaV0ucG9wKCk7cmV0dXJuIGF8fD10aGlzLl9jcmVhdGVDYW52YXNBbmRDb250ZXh0KHQsbiksYX1yZXR1cm5DYW52YXNBbmRDb250ZXh0KGUpe2xldHt3aWR0aDp0LGhlaWdodDpufT1lLmNhbnZhcyxyPSh0PDwxNykrKG48PDEpO2UuY29udGV4dC5yZXNldFRyYW5zZm9ybSgpLGUuY29udGV4dC5jbGVhclJlY3QoMCwwLHQsbiksdGhpcy5fY2FudmFzUG9vbFtyXS5wdXNoKGUpfWNsZWFyKCl7dGhpcy5fY2FudmFzUG9vbD17fX19O3QucmVnaXN0ZXIocik7ZXhwb3J0e3IgYXMgdH07">
-    <script type="module" crossorigin src="./assets/index-C1IZkPK0.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CchxP6UH.css">
-  </head>
-  <body>
-    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-      <defs>
-        <linearGradient id="uiGrad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#00d4ff"/>
-          <stop offset="50%" stop-color="#a855f7"/>
-          <stop offset="100%" stop-color="#ff6b9d"/>
-        </linearGradient>
-        <!-- 渐变描边图标 -->
-        <symbol id="i-build" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" fill="none" stroke="url(#uiGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg"/>
+    <script type="module" src="/src/main.tsx"></script>
         <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 001 1h4" fill="none" stroke="url(#uiGrad)" stroke-width="2"/><path d="M17 21H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z" fill="none" stroke="url(#uiGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-bar" viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-7" fill="none" stroke="url(#uiGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 20h17" fill="none" stroke="url(#uiGrad)" stroke-width="2"/></symbol>
         <symbol id="i-users" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="none" stroke="url(#uiGrad)" stroke-width="2"/><path d="M4 21a8 8 0 0116 0" fill="none" stroke="url(#uiGrad)" stroke-width="2" stroke-linecap="round"/></symbol>
