@@ -39,6 +39,9 @@ export function OfficeSidebar() {
         ))}
       </div>
       <div className="sidebar-footer">
+        <a className="back-to-hub-btn" href="https://ffswwwda.github.io/category-insight-hub/category-insight-hub.html" target="_blank" rel="noopener noreferrer">
+          <SvgIcon id="i-globe" size={12}/> 返回类目洞察主站
+        </a>
         <div className="user-card">
           <div className="user-avatar">U</div>
           <span><strong>用户</strong><em>在线 · 管理员</em></span>
@@ -260,6 +263,7 @@ export function OfficeBottomToolbar() {
   const [speed, setSpeed] = useState(1)
   const [phase, setPhase] = useState<'day' | 'dusk' | 'night'>('day')
   const [hudTime, setHudTime] = useState('09:00')
+  const [reportOpen, setReportOpen] = useState(false)
 
   useEffect(() => {
     const unsub = subscribeOfficeAgents((agents) => {
@@ -314,6 +318,9 @@ export function OfficeBottomToolbar() {
           <span className="toolbar-phase" data-phase={phase}>{phase === 'day' ? <SvgIcon id="i-sun" size={14}/> : phase === 'dusk' ? <SvgIcon id="i-dusk" size={14}/> : <SvgIcon id="i-moon" size={14}/>}</span>
           <span className="toolbar-speed" onClick={handleSpeed} title="点击切换时间流速">{speed}×</span>
         </span>
+        <button type="button" className="toolbar-btn primary" onClick={() => setReportOpen(true)} title="查看今日办公报告">
+          <SvgIcon id="i-brief" size={12}/>日报
+        </button>
         <button type="button" className="toolbar-btn" onClick={handlePause} title={paused ? '继续' : '暂停'}>
           <SvgIcon id={paused ? 'i-play' : 'i-pause'} size={12}/>{paused ? '继续' : '暂停'}
         </button>
@@ -323,6 +330,190 @@ export function OfficeBottomToolbar() {
         <button type="button" className="toolbar-btn" onClick={handleScreenshot} title="下载当前画面">
           <SvgIcon id="i-camera" size={12}/>截图
         </button>
+      </div>
+      {reportOpen && <OfficeDailyReport onClose={() => setReportOpen(false)} />}
+    </div>
+  )
+}
+
+/* ═════════ 今日办公报告弹窗 ═════════ */
+function fmtSec(s: number) {
+  if (s < 60) return Math.round(s) + '秒'
+  const m = Math.floor(s / 60)
+  if (m < 60) return m + '分钟'
+  return Math.floor(m / 60) + '时' + (m % 60) + '分'
+}
+
+function rankItems<T>(items: T[], getValue: (t: T) => number, limit = 3) {
+  return [...items].sort((a, b) => getValue(b) - getValue(a)).slice(0, limit)
+}
+
+function OfficeDailyReport({ onClose }: { onClose: () => void }) {
+  const [stats, setStats] = useState<Record<string, AgentStat>>({})
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [activities, setActivities] = useState<Array<{ text: string; color: number; time: string }>>([])
+  const [phase, setPhase] = useState<'day'|'dusk'|'night'>('day')
+  const [simH, setSimH] = useState(9)
+
+  useEffect(() => {
+    const handle = setInterval(() => {
+      const scene = getOfficeScene()
+      if (!scene) return
+      setStats(scene.getAgentStats())
+      setNames(scene.getAgentNames())
+      setActivities(scene.getActivityLog())
+      setPhase(scene.phase())
+      // 模拟小时数（从 simTime 算）
+      const rawTime = scene.getTimeLabel()
+      setSimH(parseInt(rawTime.split(':')[0]) || 9)
+    }, 800)
+    return () => clearInterval(handle)
+  }, [])
+
+  const agents = Object.keys(stats).map(id => ({ id, name: names[id] || id, ...stats[id] }))
+
+  // 排行
+  const topWorker = rankItems(agents, a => a.workSec, 3)
+  const topSlacker = rankItems(agents, a => a.idleSec, 3)
+  const topToilet = rankItems(agents, a => a.toiletCount, 3)
+  const topChat = rankItems(agents, a => a.chatSec, 3)
+  const topVisit = rankItems(agents, a => a.visitCount, 3)
+
+  // 走错厕所次数（从活动日志统计）
+  const wrongToiletCount = activities.filter(a => a.text.includes('走错厕所')).length
+
+  // 工作效率条形图数据
+  const totalWork = agents.reduce((s, a) => s + a.workSec, 0)
+  const totalIdle = agents.reduce((s, a) => s + a.idleSec, 0)
+  const totalChat = agents.reduce((s, a) => s + a.chatSec, 0)
+  const totalToilet = agents.reduce((s, a) => s + a.toiletTotalSec, 0)
+  const grandTotal = Math.max(totalWork + totalIdle + totalChat + totalToilet, 1)
+
+  // 下班状态
+  const offWorkAgents = agents.filter(a => {
+    const scene = getOfficeScene()
+    if (!scene) return false
+    const agent = scene.getAgents().find(x => x.id === a.id)
+    return agent?.state === 'gone'
+  })
+
+  return (
+    <div className="daily-report-overlay" onClick={onClose}>
+      <div className="daily-report-card" onClick={e => e.stopPropagation()}>
+        {/* 头 */}
+        <div className="dr-head">
+          <div className="dr-title-row">
+            <SvgIcon id="i-brief" size={18}/>
+            <h3>今日办公报告</h3>
+            <span className="dr-badge">{simH >= 18 ? '已下班' : simH >= 12 ? '下午' : '上午'}</span>
+            <span className="dr-phase-tag" data-phase={phase}>
+              {phase === 'day' ? '☀️ 白天' : phase === 'dusk' ? '🌆 傍晚' : '🌙 夜间'}
+            </span>
+          </div>
+          <p className="dr-sub">模拟时间 {simH}:00 · 实时行为统计分析</p>
+          <button className="dr-close" onClick={onClose}>✕</button>
+        </div>
+
+        {/* 核心概览 */}
+        <div className="dr-grid">
+          <div className="dr-kpi" data-tone="cyan">
+            <span className="dr-kpi-icon"><SvgIcon id="i-build" size={16}/></span>
+            <div><strong>{fmtSec(totalWork)}</strong><em>总工时</em></div>
+          </div>
+          <div className="dr-kpi" data-tone="orange">
+            <span className="dr-kpi-icon"><SvgIcon id="i-fish" size={16}/></span>
+            <div><strong>{fmtSec(totalIdle)}</strong><em>摸鱼时长</em></div>
+          </div>
+          <div className="dr-kpi" data-tone="purple">
+            <span className="dr-kpi-icon"><SvgIcon id="i-toilet" size={16}/></span>
+            <div><strong>{fmtSec(totalToilet)}</strong><em>如厕总时长</em></div>
+          </div>
+          <div className="dr-kpi" data-tone="green">
+            <span className="dr-kpi-icon"><SvgIcon id="i-msg" size={16}/></span>
+            <div><strong>{fmtSec(totalChat)}</strong><em>聊天总时长</em></div>
+          </div>
+        </div>
+
+        {/* 时间分配饼状条 */}
+        <div className="dr-section">
+          <div className="dr-section-title">时间分配总览</div>
+          <div className="dr-bar-chart">
+            {[
+              { label: '工作', value: totalWork, color: '#00d4ff' },
+              { label: '摸鱼', value: totalIdle, color: '#f97316' },
+              { label: '聊天', value: totalChat, color: '#a855f7' },
+              { label: '如厕', value: totalToilet, color: '#4a90d9' },
+            ].map(bar => {
+              const pct = grandTotal > 0 ? (bar.value / grandTotal * 100) : 0
+              return (
+                <div key={bar.label} className="dr-bar-row">
+                  <span className="dr-bar-label">{bar.label}</span>
+                  <div className="dr-bar-track">
+                    <div className="dr-bar-fill" style={{ width: pct + '%', background: bar.color }} />
+                  </div>
+                  <span className="dr-bar-val">{pct.toFixed(1)}%</span>
+                  <span className="dr-bar-time">{fmtSec(bar.value)}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* 排行榜 */}
+        <div className="dr-rankings">
+          <RankBlock tone="cyan" icon="i-build" title="卷王 Top 3" items={topWorker.map(x => ({ name: x.name, value: fmtSec(x.workSec) }))} />
+          <RankBlock tone="orange" icon="i-fish" title="摸鱼王 Top 3" items={topSlacker.map(x => ({ name: x.name, value: fmtSec(x.idleSec) }))} />
+          <RankBlock tone="purple" icon="i-toilet" title="厕所之王 Top 3" items={topToilet.map(x => ({ name: x.name, value: x.toiletCount + '次 (' + fmtSec(x.toiletTotalSec) + ')' }))} />
+          <RankBlock tone="green" icon="i-msg" title="话痨 Top 3" items={topChat.map(x => ({ name: x.name, value: fmtSec(x.chatSec) }))} />
+          <RankBlock tone="pink" icon="i-walk" title="串门王 Top 3" items={topVisit.map(x => ({ name: x.name, value: x.visitCount + '次' }))} />
+        </div>
+
+        {/* 异常事件 */}
+        {(wrongToiletCount > 0 || offWorkAgents.length > 0) && (
+          <div className="dr-section dr-alert-section">
+            <div className="dr-section-title">异常事件记录</div>
+            {wrongToiletCount > 0 && (
+              <div className="dr-alert-item" data-type="wrong-toilet">
+                <SvgIcon id="i-alert" size={14}/>
+                <span>走错厕所：<strong>{wrongToiletCount}</strong> 次（男/女不分）</span>
+              </div>
+            )}
+            {offWorkAgents.length > 0 && (
+              <div className="dr-alert-item" data-type="offwork">
+                <SvgIcon id="i-moon" size={14}/>
+                <span>已下班：<strong>{offWorkAgents.map(a => a.name).join('、')}</strong></span>
+                {offWorkAgents.length < agents.length && <span className="dr-still-working">其余 {agents.length - offWorkAgents.length} 人仍在岗或加班中</span>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 底部操作 */}
+        <div className="dr-foot">
+          <button type="button" className="toolbar-btn" onClick={onClose}>关闭报告</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 排行块子组件 */
+function RankBlock({ tone, icon, title, items }: { tone: string; icon: string; title: string; items: Array<{ name: string; value: string }> }) {
+  return (
+    <div className="dr-rank-block" data-tone={tone}>
+      <div className="dr-rank-header">
+        <SvgIcon id={icon as any} size={13}/><span>{title}</span>
+      </div>
+      <div className="dr-rank-items">
+        {items.length === 0 ? (
+          <span className="dr-empty">暂无数据</span>
+        ) : items.map((item, i) => (
+          <div key={item.name} className="dr-rank-item">
+            <span className="dr-rank-num" data-rank={i + 1}>{i + 1}</span>
+            <span className="dr-rank-name">{item.name}</span>
+            <span className="dr-rank-val">{item.value}</span>
+          </div>
+        ))}
       </div>
     </div>
   )
