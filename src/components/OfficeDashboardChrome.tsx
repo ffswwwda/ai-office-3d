@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getOfficeAgents, subscribeOfficeAgents } from '@/store/officeStore'
-import { AGENT_ROSTER } from '@/scene/layout/officeLayout'
+import { AGENT_ROSTER, PROJECTS } from '@/scene/layout/officeLayout'
 import type { Agent } from '@/types/agent'
 import { QUICK_TOOLS } from '@/config'
 import { getOfficeScene } from '@/scene/officeSceneBridge'
@@ -339,7 +339,7 @@ export function OfficeBottomToolbar() {
       <div className="toolbar-inner">
         <span className="toolbar-hud">
           <span className="toolbar-time">{hudTime}</span>
-          <span className="toolbar-phase" data-phase={phase}>{phase === 'day' ? <SvgIcon id="i-sun" size={14}/> : phase === 'dusk' ? <SvgIcon id="i-dusk" size={14}/> : <SvgIcon id="i-moon" size={14}/>}</span>
+          <span className="toolbar-phase" data-phase={phase} onClick={() => getOfficeScene()?.skipToNextPhase()} title="点击切换 白天 / 傍晚 / 夜间">{phase === 'day' ? <SvgIcon id="i-sun" size={14}/> : phase === 'dusk' ? <SvgIcon id="i-dusk" size={14}/> : <SvgIcon id="i-moon" size={14}/>}</span>
           <span className="toolbar-speed" onClick={handleSpeed} title="点击切换时间流速">{speed}×</span>
         </span>
         <button type="button" className="toolbar-btn primary" onClick={() => setReportOpen(true)} title="查看今日办公报告">
@@ -422,13 +422,19 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath()
 }
 
-/** 导出图片：把报告画到 canvas 并下载 PNG（无外部依赖） */
-function exportReportPng(p: ReportPayload) {
+/** 把报告画到 canvas 并返回（动态高度，确保全图不裁剪） */
+function renderReportCanvas(p: ReportPayload): HTMLCanvasElement {
   const scale = 2
   const W = 760
   const pad = 24
   const rows = Math.max(p.agents.length, 1)
-  const H = 96 + 92 + 150 + 40 + (rows + 1) * 30 + 170 + 50
+
+  // 预计算总高度（与下方实际绘制顺序严格一致，避免裁剪或留白）
+  const yDistBottom = 168 + 14 + 4 * 22
+  const yMembersBottom = yDistBottom + 30 + 10 + 14 + 22 + rows * 30
+  const yRankBottom = yMembersBottom + 6 + 18 + 96
+  const H = Math.ceil((p.wrongToiletCount > 0 ? yRankBottom + 116 : yRankBottom) + pad)
+
   const canvas = document.createElement('canvas')
   canvas.width = W * scale
   canvas.height = H * scale
@@ -565,14 +571,41 @@ function exportReportPng(p: ReportPayload) {
     ctx.fillText(`异常：走错厕所 ${p.wrongToiletCount} 次`, pad, y)
   }
 
+  return canvas
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/** 复制：把整张报告图写入剪贴板（全图不裁剪）；不支持时回退为下载 */
+async function copyReportImage(p: ReportPayload): Promise<{ ok: boolean; downloaded?: boolean }> {
+  try {
+    const canvas = renderReportCanvas(p)
+    const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/png'))
+    if (!blob) return { ok: false }
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
+      triggerDownload(blob, `办公日报-${String(p.simH).padStart(2, '0')}00.png`)
+      return { ok: false, downloaded: true }
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    return { ok: true }
+  } catch {
+    return { ok: false }
+  }
+}
+
+/** 导出图片：把报告画到 canvas 并下载 PNG（无外部依赖） */
+function exportReportPng(p: ReportPayload) {
+  const canvas = renderReportCanvas(p)
   canvas.toBlob((blob) => {
     if (!blob) return
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `办公日报-${String(p.simH).padStart(2, '0')}00.png`
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    triggerDownload(blob, `办公日报-${String(p.simH).padStart(2, '0')}00.png`)
   }, 'image/png')
 }
 
@@ -602,6 +635,7 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
   const [phase, setPhase] = useState<'day'|'dusk'|'night'>('day')
   const [simH, setSimH] = useState(9)
   const [copied, setCopied] = useState(false)
+  const [imgState, setImgState] = useState<'idle' | 'copied' | 'downloaded'>('idle')
 
   useEffect(() => {
     const handle = setInterval(() => {
@@ -667,6 +701,11 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1600) }
   }
   const handleExport = () => exportReportPng(payload)
+  const handleCopyImage = async () => {
+    const r = await copyReportImage(payload)
+    if (r.ok) { setImgState('copied'); setTimeout(() => setImgState('idle'), 1600) }
+    else if (r.downloaded) { setImgState('downloaded'); setTimeout(() => setImgState('idle'), 1600) }
+  }
 
   return (
     <div className="daily-report-overlay" onClick={onClose}>
@@ -791,6 +830,7 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
         {/* 底部操作 */}
         <div className="dr-foot">
           <button type="button" className="dr-act-btn" onClick={handleCopy}>{copied ? '已复制' : '复制'}</button>
+          <button type="button" className="dr-act-btn" onClick={handleCopyImage}>{imgState === 'copied' ? '已复制图片' : imgState === 'downloaded' ? '已下载图片' : '复制图片'}</button>
           <button type="button" className="dr-act-btn" onClick={handleExport}>导出图片</button>
           <button type="button" className="dr-act-btn primary" onClick={onClose}>关闭报告</button>
         </div>
@@ -820,3 +860,124 @@ function RankBlock({ tone, icon, title, items }: { tone: string; icon: string; t
     </div>
   )
 }
+
+/* ═════════ 真实项目弹窗（主从布局）════════ */
+export function OfficeProjectsModal({ onClose }: { onClose: () => void }) {
+  const [activeId, setActiveId] = useState<string>(PROJECTS[0]?.id ?? '')
+  const active = PROJECTS.find(p => p.id === activeId) ?? PROJECTS[0]
+  const agentName = (id: string) => AGENT_ROSTER.find(r => r.id === id)?.name ?? id
+  const agentColor = (id: string) => {
+    const c = AGENT_ROSTER.find(r => r.id === id)?.color
+    return c != null ? '#' + c.toString(16).padStart(6, '0') : '#888'
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div className="projects-overlay" onClick={onClose}>
+      <div className="projects-card" onClick={e => e.stopPropagation()}>
+        <div className="proj-head">
+          <div className="proj-title-row">
+            <SvgIcon id="i-folder" size={18}/>
+            <h3>真实项目看板</h3>
+            <span className="proj-count">{PROJECTS.length} 个进行中 / 规划项目</span>
+          </div>
+          <button className="dr-close" onClick={onClose} aria-label="关闭项目">×</button>
+        </div>
+        <div className="proj-body">
+          {/* 左侧主列表 */}
+          <div className="proj-list">
+            {PROJECTS.map(p => {
+              const owner = agentName(p.ownerId)
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={'proj-item' + (p.id === activeId ? ' on' : '')}
+                  onClick={() => setActiveId(p.id)}
+                >
+                  <span className="proj-item-icon"><SvgIcon id={p.icon} size={15}/></span>
+                  <span className="proj-item-main">
+                    <span className="proj-item-name">{p.name}</span>
+                    <span className="proj-item-owner">负责人 · {owner}</span>
+                  </span>
+                  <span className={'proj-item-status'} data-status={p.status}>{p.status}</span>
+                </button>
+              )
+            })}
+          </div>
+          {/* 右侧详情 */}
+          {active && (
+            <div className="proj-detail">
+              <div className="proj-detail-head">
+                <span className="proj-detail-icon"><SvgIcon id={active.icon} size={20}/></span>
+                <div>
+                  <div className="proj-detail-name">{active.name}</div>
+                  <div className="proj-detail-tags">
+                    <span className="proj-tag" data-status={active.status}>{active.status}</span>
+                    <span className="proj-tag">负责人 {agentName(active.ownerId)}</span>
+                  </div>
+                </div>
+              </div>
+              {/* 进度条 */}
+              <div className="proj-progress">
+                <div className="proj-progress-track">
+                  <div className="proj-progress-fill" style={{ width: active.progress + '%' }}/>
+                </div>
+                <span className="proj-progress-val">{active.progress}%</span>
+              </div>
+              {/* 成员 */}
+              <div className="proj-section">
+                <div className="proj-section-title"><SvgIcon id="i-users" size={12}/> 参与成员</div>
+                <div className="proj-members">
+                  {active.memberIds.map(id => (
+                    <span key={id} className="proj-member" style={{ borderColor: agentColor(id) }}>
+                      <span className="proj-member-dot" style={{ background: agentColor(id) }}/>
+                      {agentName(id)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {/* 简介 */}
+              <div className="proj-section">
+                <div className="proj-section-title"><SvgIcon id="i-doc" size={12}/> 项目简介</div>
+                <p className="proj-text">{active.desc}</p>
+              </div>
+              {/* 分工 */}
+              <div className="proj-section">
+                <div className="proj-section-title"><SvgIcon id="i-sliders" size={12}/> 分工</div>
+                <ul className="proj-list-text">
+                  {active.division.map((d, i) => <li key={i}>{d}</li>)}
+                </ul>
+              </div>
+              {/* 进展 */}
+              <div className="proj-section">
+                <div className="proj-section-title"><SvgIcon id="i-trend" size={12}/> 当前进展</div>
+                <p className="proj-text">{active.progressText}</p>
+              </div>
+              {/* 输出成果 */}
+              <div className="proj-section">
+                <div className="proj-section-title"><SvgIcon id="i-bar" size={12}/> 输出成果</div>
+                <div className="proj-outputs">
+                  {active.outputs.map((o, i) => (
+                    <span key={i} className="proj-output">{o}</span>
+                  ))}
+                </div>
+              </div>
+              {active.link && (
+                <a className="proj-link" href={active.link} target="_blank" rel="noopener noreferrer">
+                  <SvgIcon id="i-link" size={13}/> 打开关联工具
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+

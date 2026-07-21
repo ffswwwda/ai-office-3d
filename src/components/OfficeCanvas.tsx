@@ -185,8 +185,8 @@ export function OfficeCanvas() {
       setMenu({
         agent: target,
         rosterNo: 0,
-        x: Math.max(12, rect.width - mw - 24),
-        y: Math.max(12, 80),
+        x: 16,
+        y: 16,
         agents,
         pickingTarget: false,
       })

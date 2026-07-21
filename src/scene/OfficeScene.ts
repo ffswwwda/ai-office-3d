@@ -20,7 +20,7 @@ export type OfficeAgentClick = {
 
 type AutoWorkflowStep = { visitor: number; host: number; message: string }
 const AUTO_WORKFLOW_MAX_ACTIVE = 2
-const AUTO_WORKFLOW_INTERVAL = 1.2
+const AUTO_WORKFLOW_INTERVAL = 300
 
 const AUTO_WORKFLOW_STEPS: AutoWorkflowStep[] = [
   { visitor: 1, host: 2, message: '新一批评价数据出来了，帮忙跑一下打分。' },
@@ -47,7 +47,8 @@ export class OfficeScene {
   /** 每个 agent 的累计统计 */
   private agentStats: Record<string, {
     workSec: number; idleSec: number; chatSec: number; visitCount: number;
-    toiletCount: number; toiletTotalSec: number; visitReceiveCount: number
+    toiletCount: number; toiletTotalSec: number; visitReceiveCount: number;
+    visitCounted: boolean
   }> = {}
 
   private agents: Agent[] = INITIAL_AGENTS.map((a) => ({ ...a }))
@@ -223,7 +224,7 @@ export class OfficeScene {
       if (!this.agentStats[a.id]) {
         this.agentStats[a.id] = {
           workSec: 0, idleSec: 0, chatSec: 0, visitCount: 0,
-          toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0
+          toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0, visitCounted: false
         }
       }
       const s = this.agentStats[a.id]
@@ -238,10 +239,11 @@ export class OfficeScene {
       } else if (a.state === 'talking') {
         s.chatSec += dt
       }
-      // 拜访计数（mission 启动时）
-      if (a.mission && a.mission.kind === 'desk_visit') {
-        s.visitCount += 1
-        s.visitReceiveCount += 0
+      // 拜访计数：每次 desk_visit mission 只计 1 次（用 flag 防止每帧累加导致"串门几百次"）
+      if (a.mission && (a.mission as any).kind === 'desk_visit') {
+        if (!s.visitCounted) { s.visitCount += 1; s.visitCounted = true }
+      } else {
+        s.visitCounted = false
       }
     }
   }
@@ -429,7 +431,7 @@ export class OfficeScene {
   private enterStall(stallIdx: number, agentId: string, agentName: string) {
     // 累加上厕所次数
     if (!this.agentStats[agentId]) {
-      this.agentStats[agentId] = { workSec: 0, idleSec: 0, chatSec: 0, visitCount: 0, toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0 }
+      this.agentStats[agentId] = { workSec: 0, idleSec: 0, chatSec: 0, visitCount: 0, toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0, visitCounted: false }
     }
     this.agentStats[agentId].toiletCount += 1
 
@@ -558,6 +560,15 @@ export class OfficeScene {
     const h = Math.floor(this.simTime / 3600) % 24
     const m = Math.floor((this.simTime % 3600) / 60)
     return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0')
+  }
+
+  /** 点击昼夜标识：把模拟时间跳到下一阶段起点（白天→傍晚→夜间→白天） */
+  skipToNextPhase() {
+    const h = this.simTime / 3600
+    if (h >= 9 && h < 18) this.simTime = 18 * 3600
+    else if (h >= 18 && h < 21) this.simTime = 21 * 3600
+    else this.simTime = 9 * 3600
+    this.applyNightOverlay(this.phase())
   }
 
   /** 根据阶段设置夜晚遮罩透明度 */
@@ -795,9 +806,10 @@ export class OfficeScene {
     wcText.position.set(60, 11)
     map.addChild(wcText)
 
-    // 女性/男性 标记（带色块底）
+    // 女性/男性 标记（带色块底）—— 居中到各自隔间组上方
+    // 女厕组：隔间 0-2，中心 x=330；男厕组：隔间 3-4，中心 x=655
     const wcWLabel = new Graphics()
-    wcWLabel.roundRect(160, 6, 110, 22, 4)
+    wcWLabel.roundRect(275, 6, 110, 22, 4)
     wcWLabel.fill({ color: 0xe91e63, alpha: 0.95 })
     wcWLabel.stroke({ color: 0xff6b9d, width: 1 })
     map.addChild(wcWLabel)
@@ -808,10 +820,11 @@ export class OfficeScene {
         fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
       }),
     })
-    wcWText.position.set(168, 11)
+    wcWText.anchor.set(0.5)
+    wcWText.position.set(330, 17)
     map.addChild(wcWText)
     const wcMLabel = new Graphics()
-    wcMLabel.roundRect(450, 6, 110, 22, 4)
+    wcMLabel.roundRect(600, 6, 110, 22, 4)
     wcMLabel.fill({ color: 0x4a90d9, alpha: 0.95 })
     wcMLabel.stroke({ color: 0x0ea5e9, width: 1 })
     map.addChild(wcMLabel)
@@ -822,7 +835,8 @@ export class OfficeScene {
         fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
       }),
     })
-    wcMText.position.set(458, 11)
+    wcMText.anchor.set(0.5)
+    wcMText.position.set(655, 17)
     map.addChild(wcMText)
 
     // 5 个隔间：前 3 女厕（粉色），后 2 男厕（蓝色）
