@@ -99,7 +99,9 @@ export class OfficeScene {
 
     // 夜晚遮罩
     this.nightOverlay = new Container()
+    this.nightOverlay.eventMode = 'none'
     const ng = new Graphics()
+    ng.eventMode = 'none'
     ng.rect(0, 0, SCENE_WIDTH, SCENE_HEIGHT)
     ng.fill({ color: 0x0a0e27, alpha: 0.0 })
     this.nightOverlay.addChild(ng)
@@ -254,6 +256,39 @@ export class OfficeScene {
     const map: Record<string, string> = {}
     for (const a of this.agents) map[a.id] = a.name
     return map
+  }
+
+  /** 暴露单个员工的实时工作状态（给员工卡"工作状态"区用） */
+  getAgentWorkStatus(id: string) {
+    const a = this.agents.find(x => x.id === id)
+    const s = this.agentStats[id] || { workSec: 0, idleSec: 0, chatSec: 0, visitCount: 0, toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0 }
+    const h = Math.floor(this.simTime / 3600) % 24
+    const m = Math.floor((this.simTime % 3600) / 60)
+    const now = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0')
+    const stateLabel =
+      a?.state === 'working' ? '工作中' :
+      a?.state === 'idle' ? '摸鱼/发呆' :
+      a?.state === 'walking' ? '走动中' :
+      a?.state === 'talking' ? '串门聊天' :
+      a?.state === 'thinking' ? '思考中' : (a?.state || '离线')
+    const name = a?.name || id
+    const recent = this.activityLog
+      .filter(e => e.text.includes(name))
+      .slice(-5)
+      .reverse()
+      .map(e => ({ text: e.text, time: e.time }))
+    return {
+      clockIn: '09:00',
+      now,
+      state: stateLabel,
+      workSec: Math.round(s.workSec),
+      idleSec: Math.round(s.idleSec),
+      chatSec: Math.round(s.chatSec),
+      toiletCount: s.toiletCount,
+      toiletTotalSec: Math.round(s.toiletTotalSec),
+      visitCount: s.visitCount,
+      recent
+    }
   }
 
   /** 触发一次厕所演示（点击门调用） */
@@ -670,6 +705,11 @@ export class OfficeScene {
 
     for (const desk of DESKS) {
       const entity = new DeskEntity(desk)
+      // 桌面/椅子等不参与交互，避免遮挡对 agent 的点击
+      entity.shadowGfx.eventMode = 'none'
+      entity.deskLayer.eventMode = 'none'
+      entity.chairLayer.eventMode = 'none'
+      entity.occupiedIndicator.eventMode = 'none'
       this.deskEntities.set(desk.id, entity)
       layer.addChild(entity.shadowGfx, entity.deskLayer, entity.chairLayer, entity.occupiedIndicator)
     }

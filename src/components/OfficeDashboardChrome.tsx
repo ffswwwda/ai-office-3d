@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getOfficeAgents, subscribeOfficeAgents } from '@/store/officeStore'
 import { AGENT_ROSTER } from '@/scene/layout/officeLayout'
 import type { Agent } from '@/types/agent'
@@ -113,6 +114,13 @@ function fmtTime(sec: number) {
   if (sec < 60) return Math.round(sec) + 's'
   if (sec < 3600) return Math.floor(sec / 60) + 'm'
   return Math.floor(sec / 3600) + 'h' + Math.floor((sec % 3600) / 60) + 'm'
+}
+
+function fmtSec(s: number) {
+  if (s < 60) return Math.round(s) + '秒'
+  const m = Math.floor(s / 60)
+  if (m < 60) return m + '分钟'
+  return Math.floor(m / 60) + '时' + (m % 60) + '分'
 }
 
 export function OfficeRightPanel() {
@@ -347,21 +355,244 @@ export function OfficeBottomToolbar() {
           <SvgIcon id="i-camera" size={12}/>截图
         </button>
       </div>
-      {reportOpen && <OfficeDailyReport onClose={() => setReportOpen(false)} />}
+      {reportOpen && createPortal(
+        <OfficeDailyReport onClose={() => setReportOpen(false)} />,
+        document.body,
+      )}
     </div>
   )
 }
 
 /* ═════════ 今日办公报告弹窗 ═════════ */
-function fmtSec(s: number) {
-  if (s < 60) return Math.round(s) + '秒'
-  const m = Math.floor(s / 60)
-  if (m < 60) return m + '分钟'
-  return Math.floor(m / 60) + '时' + (m % 60) + '分'
-}
-
 function rankItems<T>(items: T[], getValue: (t: T) => number, limit = 3) {
   return [...items].sort((a, b) => getValue(b) - getValue(a)).slice(0, limit)
+}
+
+type ReportAgent = {
+  id: string; name: string
+  workSec: number; idleSec: number; chatSec: number
+  toiletCount: number; toiletTotalSec: number; visitCount: number
+}
+type ReportPayload = {
+  agents: ReportAgent[]
+  simH: number
+  phase: 'day' | 'dusk' | 'night'
+  wrongToiletCount: number
+}
+
+/** 复制：生成 Markdown 摘要写入剪贴板 */
+async function copyReportText(p: ReportPayload): Promise<boolean> {
+  const totalW = p.agents.reduce((s, a) => s + a.workSec, 0)
+  const totalI = p.agents.reduce((s, a) => s + a.idleSec, 0)
+  const totalC = p.agents.reduce((s, a) => s + a.chatSec, 0)
+  const totalT = p.agents.reduce((s, a) => s + a.toiletTotalSec, 0)
+  const lines: string[] = []
+  lines.push('# 今日办公报告')
+  lines.push(`模拟时间 ${String(p.simH).padStart(2, '0')}:00 · 阶段：${p.phase === 'day' ? '白天' : p.phase === 'dusk' ? '傍晚' : '夜间'}`)
+  lines.push('')
+  lines.push(`- 总工时：${fmtSec(totalW)}`)
+  lines.push(`- 总摸鱼：${fmtSec(totalI)}`)
+  lines.push(`- 总聊天：${fmtSec(totalC)}`)
+  lines.push(`- 总如厕：${fmtSec(totalT)}`)
+  lines.push('')
+  lines.push('| 成员 | 工时 | 摸鱼 | 聊天 | 如厕 | 串门 |')
+  lines.push('| --- | --- | --- | --- | --- | --- |')
+  for (const a of p.agents) {
+    lines.push(`| ${a.name} | ${fmtSec(a.workSec)} | ${fmtSec(a.idleSec)} | ${fmtSec(a.chatSec)} | ${a.toiletCount}次(${fmtSec(a.toiletTotalSec)}) | ${a.visitCount}次 |`)
+  }
+  if (p.wrongToiletCount > 0) {
+    lines.push('')
+    lines.push(`异常：走错厕所 ${p.wrongToiletCount} 次`)
+  }
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
+}
+
+/** 导出图片：把报告画到 canvas 并下载 PNG（无外部依赖） */
+function exportReportPng(p: ReportPayload) {
+  const scale = 2
+  const W = 760
+  const pad = 24
+  const rows = Math.max(p.agents.length, 1)
+  const H = 96 + 92 + 150 + 40 + (rows + 1) * 30 + 170 + 50
+  const canvas = document.createElement('canvas')
+  canvas.width = W * scale
+  canvas.height = H * scale
+  const ctx = canvas.getContext('2d')!
+  ctx.scale(scale, scale)
+
+  ctx.fillStyle = '#121424'
+  ctx.fillRect(0, 0, W, H)
+
+  // 顶部三色渐变条
+  const grad = ctx.createLinearGradient(0, 0, W, 0)
+  grad.addColorStop(0, '#00d4ff'); grad.addColorStop(0.55, '#a855f7'); grad.addColorStop(1, '#ff6b9d')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, W, 6)
+
+  ctx.fillStyle = '#e8e8f0'
+  ctx.font = '700 20px -apple-system,BlinkMacSystemFont,sans-serif'
+  ctx.fillText('今日办公报告', pad, 44)
+  ctx.fillStyle = '#8888a0'
+  ctx.font = '12px -apple-system,BlinkMacSystemFont,sans-serif'
+  ctx.fillText(`模拟时间 ${String(p.simH).padStart(2, '0')}:00 · ${p.phase === 'day' ? '白天' : p.phase === 'dusk' ? '傍晚' : '夜间'} · 实时行为统计`, pad, 64)
+
+  const totalWork = p.agents.reduce((s, a) => s + a.workSec, 0)
+  const totalIdle = p.agents.reduce((s, a) => s + a.idleSec, 0)
+  const totalChat = p.agents.reduce((s, a) => s + a.chatSec, 0)
+  const totalToilet = p.agents.reduce((s, a) => s + a.toiletTotalSec, 0)
+
+  // KPI
+  const kpis = [
+    { label: '总工时', value: fmtSec(totalWork), color: '#00d4ff' },
+    { label: '摸鱼时长', value: fmtSec(totalIdle), color: '#f97316' },
+    { label: '如厕总时长', value: fmtSec(totalToilet), color: '#4a90d9' },
+    { label: '聊天总时长', value: fmtSec(totalChat), color: '#a855f7' },
+  ]
+  const kw = (W - pad * 2 - 24) / 4
+  kpis.forEach((k, i) => {
+    const x = pad + i * (kw + 8)
+    const y = 80
+    ctx.fillStyle = 'rgba(255,255,255,0.03)'
+    roundRect(ctx, x, y, kw, 64, 12); ctx.fill()
+    ctx.fillStyle = k.color
+    ctx.font = '700 18px -apple-system,BlinkMacSystemFont,sans-serif'
+    ctx.fillText(k.value, x + 12, y + 30)
+    ctx.fillStyle = '#8888a0'
+    ctx.font = '11px -apple-system,BlinkMacSystemFont,sans-serif'
+    ctx.fillText(k.label, x + 12, y + 50)
+  })
+
+  // 时间分配条
+  let y = 168
+  ctx.fillStyle = '#c0c0d0'
+  ctx.font = '700 12px -apple-system,BlinkMacSystemFont,sans-serif'
+  ctx.fillText('时间分配总览', pad, y)
+  y += 14
+  const grand = Math.max(totalWork + totalIdle + totalChat + totalToilet, 1)
+  const bars = [
+    { label: '工作', value: totalWork, color: '#00d4ff' },
+    { label: '摸鱼', value: totalIdle, color: '#f97316' },
+    { label: '聊天', value: totalChat, color: '#a855f7' },
+    { label: '如厕', value: totalToilet, color: '#4a90d9' },
+  ]
+  const trackW = W - pad * 2 - 210
+  bars.forEach((b) => {
+    y += 22
+    ctx.fillStyle = '#c0c0d0'
+    ctx.font = '11px -apple-system,BlinkMacSystemFont,sans-serif'
+    ctx.fillText(b.label, pad, y)
+    const bx = pad + 44
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'
+    roundRect(ctx, bx, y - 11, trackW, 10, 5); ctx.fill()
+    const pct = (b.value / grand) * 100
+    ctx.fillStyle = b.color
+    roundRect(ctx, bx, y - 11, Math.max(trackW * pct / 100, 2), 10, 5); ctx.fill()
+    ctx.fillStyle = '#e8e8f0'
+    ctx.font = '700 11px -apple-system,BlinkMacSystemFont,sans-serif'
+    ctx.fillText(`${pct.toFixed(1)}%  ${fmtSec(b.value)}`, bx + trackW + 8, y)
+  })
+
+  // 成员明细表
+  y += 30
+  ctx.fillStyle = '#c0c0d0'
+  ctx.font = '700 12px -apple-system,BlinkMacSystemFont,sans-serif'
+  ctx.fillText('成员明细', pad, y)
+  y += 10
+  const cols = ['成员', '工时', '摸鱼', '聊天', '如厕', '串门']
+  const colX = [pad, pad + 150, pad + 250, pad + 340, pad + 430, pad + 520]
+  ctx.font = '700 11px -apple-system,BlinkMacSystemFont,sans-serif'
+  ctx.fillStyle = '#8888a0'
+  cols.forEach((c, i) => ctx.fillText(c, colX[i], y + 14))
+  y += 22
+  ctx.font = '12px -apple-system,BlinkMacSystemFont,sans-serif'
+  p.agents.forEach((a) => {
+    ctx.fillStyle = 'rgba(255,255,255,0.02)'
+    roundRect(ctx, pad, y - 4, W - pad * 2, 26, 6); ctx.fill()
+    ctx.fillStyle = '#e8e8f0'; ctx.fillText(a.name, colX[0], y + 14)
+    ctx.fillStyle = '#34c759'; ctx.fillText(fmtSec(a.workSec), colX[1], y + 14)
+    ctx.fillStyle = '#f97316'; ctx.fillText(fmtSec(a.idleSec), colX[2], y + 14)
+    ctx.fillStyle = '#a855f7'; ctx.fillText(fmtSec(a.chatSec), colX[3], y + 14)
+    ctx.fillStyle = '#4a90d9'; ctx.fillText(`${a.toiletCount}次`, colX[4], y + 14)
+    ctx.fillStyle = '#ff6b9d'; ctx.fillText(`${a.visitCount}次`, colX[5], y + 14)
+    y += 30
+  })
+
+  // 排行榜
+  y += 6
+  ctx.fillStyle = '#c0c0d0'
+  ctx.font = '700 12px -apple-system,BlinkMacSystemFont,sans-serif'
+  ctx.fillText('排行榜', pad, y)
+  y += 18
+  const ranks = [
+    { title: '卷王', items: rankItems(p.agents, a => a.workSec).map(a => `${a.name} ${fmtSec(a.workSec)}`), color: '#00d4ff' },
+    { title: '摸鱼王', items: rankItems(p.agents, a => a.idleSec).map(a => `${a.name} ${fmtSec(a.idleSec)}`), color: '#f97316' },
+    { title: '厕所之王', items: rankItems(p.agents, a => a.toiletCount).map(a => `${a.name} ${a.toiletCount}次`), color: '#4a90d9' },
+    { title: '话痨', items: rankItems(p.agents, a => a.chatSec).map(a => `${a.name} ${fmtSec(a.chatSec)}`), color: '#a855f7' },
+    { title: '串门王', items: rankItems(p.agents, a => a.visitCount).map(a => `${a.name} ${a.visitCount}次`), color: '#ff6b9d' },
+  ]
+  const cw = (W - pad * 2 - 16) / 5
+  ranks.forEach((r, i) => {
+    const x = pad + i * (cw + 4)
+    ctx.fillStyle = 'rgba(255,255,255,0.02)'
+    roundRect(ctx, x, y, cw, 96, 8); ctx.fill()
+    ctx.fillStyle = r.color
+    ctx.font = '700 11px -apple-system,BlinkMacSystemFont,sans-serif'
+    ctx.fillText(r.title, x + 8, y + 16)
+    ctx.fillStyle = '#c0c0d0'
+    ctx.font = '11px -apple-system,BlinkMacSystemFont,sans-serif'
+    r.items.forEach((it, j) => ctx.fillText(`${j + 1}. ${it}`, x + 8, y + 36 + j * 18))
+  })
+
+  if (p.wrongToiletCount > 0) {
+    y += 116
+    ctx.fillStyle = '#ef4444'
+    ctx.font = '11px -apple-system,BlinkMacSystemFont,sans-serif'
+    ctx.fillText(`异常：走错厕所 ${p.wrongToiletCount} 次`, pad, y)
+  }
+
+  canvas.toBlob((blob) => {
+    if (!blob) return
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `办公日报-${String(p.simH).padStart(2, '0')}00.png`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }, 'image/png')
+}
+
+/** 团队今日小结（动态生成文案） */
+function buildTeamSummary(
+  agents: ReportAgent[],
+  topWorker: ReportAgent[],
+  topSlacker: ReportAgent[],
+  wrongToiletCount: number,
+  simH: number,
+): string {
+  if (agents.length === 0) return '数据收集中，稍候片刻即可看到团队今日的行为画像。'
+  const parts: string[] = []
+  parts.push(`截至 ${String(simH).padStart(2, '0')}:00，团队共 ${agents.length} 人在岗。`)
+  const worker = topWorker[0]
+  const slacker = topSlacker[0]
+  if (worker && worker.workSec > 0) parts.push(`最卷的是 ${worker.name}（工时 ${fmtSec(worker.workSec)}）`)
+  if (slacker && slacker.idleSec > 0) parts.push(`最摸鱼的是 ${slacker.name}（摸鱼 ${fmtSec(slacker.idleSec)}）`)
+  if (wrongToiletCount > 0) parts.push(`今日还发生了 ${wrongToiletCount} 次走错厕所的乌龙。`)
+  return parts.join('，') + '。'
 }
 
 function OfficeDailyReport({ onClose }: { onClose: () => void }) {
@@ -370,6 +601,7 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
   const [activities, setActivities] = useState<Array<{ text: string; color: number; time: string }>>([])
   const [phase, setPhase] = useState<'day'|'dusk'|'night'>('day')
   const [simH, setSimH] = useState(9)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     const handle = setInterval(() => {
@@ -386,7 +618,21 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
     return () => clearInterval(handle)
   }, [])
 
-  const agents = Object.keys(stats).map(id => ({ id, name: names[id] || id, ...stats[id] }))
+  // Escape 关闭
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const agents: ReportAgent[] = Object.keys(stats).map(id => {
+    const s = stats[id]!
+    return {
+      id, name: names[id] || id,
+      workSec: s.workSec, idleSec: s.idleSec, chatSec: s.chatSec,
+      toiletCount: s.toiletCount, toiletTotalSec: s.toiletTotalSec, visitCount: s.visitCount,
+    }
+  })
 
   // 排行
   const topWorker = rankItems(agents, a => a.workSec, 3)
@@ -413,6 +659,15 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
     return agent?.state === 'gone'
   })
 
+  const payload: ReportPayload = { agents, simH, phase, wrongToiletCount }
+  const summary = buildTeamSummary(agents, topWorker, topSlacker, wrongToiletCount, simH)
+
+  const handleCopy = async () => {
+    const ok = await copyReportText(payload)
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1600) }
+  }
+  const handleExport = () => exportReportPng(payload)
+
   return (
     <div className="daily-report-overlay" onClick={onClose}>
       <div className="daily-report-card" onClick={e => e.stopPropagation()}>
@@ -423,11 +678,18 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
             <h3>今日办公报告</h3>
             <span className="dr-badge">{simH >= 18 ? '已下班' : simH >= 12 ? '下午' : '上午'}</span>
             <span className="dr-phase-tag" data-phase={phase}>
-              {phase === 'day' ? '☀️ 白天' : phase === 'dusk' ? '🌆 傍晚' : '🌙 夜间'}
+              <SvgIcon id={phase === 'day' ? 'i-sun' : phase === 'dusk' ? 'i-dusk' : 'i-moon'} size={13}/>
+              {phase === 'day' ? '白天' : phase === 'dusk' ? '傍晚' : '夜间'}
             </span>
           </div>
-          <p className="dr-sub">模拟时间 {simH}:00 · 实时行为统计分析</p>
-          <button className="dr-close" onClick={onClose}>✕</button>
+          <p className="dr-sub">模拟时间 {String(simH).padStart(2, '0')}:00 · 实时行为统计分析</p>
+          <button className="dr-close" onClick={onClose} aria-label="关闭报告">×</button>
+        </div>
+
+        {/* 团队今日小结 */}
+        <div className="dr-section dr-summary">
+          <div className="dr-section-title"><SvgIcon id="i-chart" size={12}/> 团队今日小结</div>
+          <p className="dr-summary-text">{summary}</p>
         </div>
 
         {/* 核心概览 */}
@@ -475,6 +737,28 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
+        {/* 成员明细表 */}
+        <div className="dr-section">
+          <div className="dr-section-title">成员明细</div>
+          <div className="dr-table">
+            <div className="dr-tr dr-th">
+              <span>成员</span><span>工时</span><span>摸鱼</span><span>聊天</span><span>如厕</span><span>串门</span>
+            </div>
+            {agents.length === 0 ? (
+              <div className="dr-tr"><span className="dr-empty" style={{ gridColumn: '1 / -1' }}>数据收集中…</span></div>
+            ) : agents.map(a => (
+              <div className="dr-tr" key={a.id}>
+                <span className="dr-name">{a.name}</span>
+                <span className="t-work">{fmtSec(a.workSec)}</span>
+                <span className="t-idle">{fmtSec(a.idleSec)}</span>
+                <span className="t-chat">{fmtSec(a.chatSec)}</span>
+                <span className="t-toilet">{a.toiletCount}次</span>
+                <span className="t-visit">{a.visitCount}次</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* 排行榜 */}
         <div className="dr-rankings">
           <RankBlock tone="cyan" icon="i-build" title="卷王 Top 3" items={topWorker.map(x => ({ name: x.name, value: fmtSec(x.workSec) }))} />
@@ -506,7 +790,9 @@ function OfficeDailyReport({ onClose }: { onClose: () => void }) {
 
         {/* 底部操作 */}
         <div className="dr-foot">
-          <button type="button" className="toolbar-btn" onClick={onClose}>关闭报告</button>
+          <button type="button" className="dr-act-btn" onClick={handleCopy}>{copied ? '已复制' : '复制'}</button>
+          <button type="button" className="dr-act-btn" onClick={handleExport}>导出图片</button>
+          <button type="button" className="dr-act-btn primary" onClick={onClose}>关闭报告</button>
         </div>
       </div>
     </div>

@@ -133,17 +133,26 @@ export class AgentEntity extends Container {
     g.roundRect(-7, -8 + bounce, 14, 4, 2)
     g.fill(0xe0ded4)
 
-    // head
-    g.circle(facing * 1, -20 + bounce, 10)
-    g.fill(0xffe0c4)
-    // hair
-    g.roundRect(facing * 1 - 10, -28 + bounce, 20, 8, 3)
-    g.fill(0x2a2a30)
-
-    // eyes
-    g.circle(facing * 1 - 3, -20 + bounce, 1.2)
-    g.circle(facing * 1 + 3, -20 + bounce, 1.2)
-    g.fill(0x222222)
+    // 头 / 脸 / 后脑勺（根据朝向区分正反面）
+    const view = this.agent.viewFacing ?? 'front'
+    if (view === 'back') {
+      // 背影：头发盖住整颗头，不画脸（我们看到他的后背）
+      g.circle(facing * 1, -20 + bounce, 10)
+      g.fill(0xffe0c4) // 脖子/皮肤
+      g.roundRect(facing * 1 - 11, -31 + bounce, 22, 16, 7)
+      g.fill(0x2a2a30) // 后脑勺头发
+      g.roundRect(facing * 1 - 9, -24 + bounce, 18, 12, 6)
+      g.fill(0x33333a) // 后脑勺弧光
+    } else {
+      // 正面：头 + 脸 + 眼睛
+      g.circle(facing * 1, -20 + bounce, 10)
+      g.fill(0xffe0c4)
+      g.roundRect(facing * 1 - 10, -28 + bounce, 20, 8, 3)
+      g.fill(0x2a2a30)
+      g.circle(facing * 1 - 3, -20 + bounce, 1.2)
+      g.circle(facing * 1 + 3, -20 + bounce, 1.2)
+      g.fill(0x222222)
+    }
 
     // working arm
     if (state === 'working') {
@@ -168,7 +177,11 @@ export class AgentEntity extends Container {
       }
     }
 
-    this.accent.roundRect(facing * 4 - 5, -2 + bounce, 10, 8, 2)
+    if (view === 'back') {
+      this.accent.roundRect(-5, -2 + bounce, 10, 8, 2)
+    } else {
+      this.accent.roundRect(facing * 4 - 5, -2 + bounce, 10, 8, 2)
+    }
     this.accent.fill(this.agent.color)
 
     // counter-flip labels so text stays upright when character faces left

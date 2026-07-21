@@ -1144,6 +1144,76 @@
   background: linear-gradient(135deg,rgba(0,212,255,.25),rgba(168,85,247,.18));
 }
 
+/* 团队小结 */
+.dr-summary { background: rgba(0, 212, 255, 0.04); }
+.dr-summary-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+/* 成员明细表 */
+.dr-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dr-tr {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr 0.9fr 0.9fr;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dr-tr.dr-th {
+  background: transparent;
+  padding: 2px 10px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: .3px;
+}
+.dr-name { color: var(--ink); font-weight: 600; }
+.t-work { color: #34c759; font-weight: 600; }
+.t-idle { color: #f97316; font-weight: 600; }
+.t-chat { color: #a855f7; font-weight: 600; }
+.t-toilet { color: #4a90d9; font-weight: 600; }
+.t-visit { color: #ff6b9d; font-weight: 600; }
+.dr-empty { color: var(--muted); font-style: italic; font-size: 11px; }
+
+/* 底部操作按钮（复制 / 导出图片 / 关闭） */
+.dr-foot { gap: 8px; }
+.dr-act-btn {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-2);
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.dr-act-btn:hover {
+  background: rgba(0, 212, 255, 0.10);
+  color: var(--ink);
+  border-color: rgba(0, 212, 255, 0.3);
+}
+.dr-act-btn.primary {
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(168, 85, 247, 0.12));
+  border-color: rgba(0, 212, 255, 0.25);
+  color: #0ea5e9;
+}
+.dr-act-btn.primary:hover {
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.25), rgba(168, 85, 247, 0.18));
+}
+
 @media (max-width: 650px) {
   .dr-grid { grid-template-columns: repeat(2, 1fr); }
   .dr-rankings { grid-template-columns: repeat(2, 1fr); }
