@@ -75,9 +75,15 @@ export class OfficeScene {
   private activityLog: Array<{ text: string; color: number; time: string; ts: number }> = []
   /** 上次决策时间（避免连续触发） */
   private lastToiletCheck = 0
-  private readonly options: { onAgentClick?: (event: OfficeAgentClick) => void }
+  private readonly options: {
+    onAgentClick?: (event: OfficeAgentClick) => void
+    onToiletPeek?: (agentName: string) => void
+  }
 
-  constructor(options: { onAgentClick?: (event: OfficeAgentClick) => void } = {}) {
+  constructor(options: {
+    onAgentClick?: (event: OfficeAgentClick) => void
+    onToiletPeek?: (agentName: string) => void
+  } = {}) {
     this.options = options
   }
 
@@ -261,12 +267,15 @@ export class OfficeScene {
   }
 
   /** 暴露单个员工的实时工作状态（给员工卡"工作状态"区用） */
-  getAgentWorkStatus(id: string) {
+  getAgentWorkStatus(id: string, withSeconds = false) {
     const a = this.agents.find(x => x.id === id)
     const s = this.agentStats[id] || { workSec: 0, idleSec: 0, chatSec: 0, visitCount: 0, toiletCount: 0, toiletTotalSec: 0, visitReceiveCount: 0 }
     const h = Math.floor(this.simTime / 3600) % 24
     const m = Math.floor((this.simTime % 3600) / 60)
-    const now = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0')
+    const sec = Math.floor(this.simTime % 60)
+    const now = withSeconds
+      ? String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0')
+      : String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0')
     const stateLabel =
       a?.state === 'working' ? '工作中' :
       a?.state === 'idle' ? '摸鱼/发呆' :
@@ -304,6 +313,8 @@ export class OfficeScene {
     const candidates = this.agents.filter(a => a.state === 'working' || a.state === 'idle')
     if (candidates.length === 0) return
     const agent = candidates[Math.floor(Math.random() * candidates.length)]
+    // 通知 UI：有人去上厕所了，弹「不要偷看！！！」
+    this.options.onToiletPeek?.(agent.name)
     const stallIdx = freeStalls[Math.floor(Math.random() * freeStalls.length)]
     const minutes = Math.random() < 0.5 ? (1 + Math.floor(Math.random() * 4)) : (10 + Math.floor(Math.random() * 25))
     this.stallEntryTime[stallIdx] = minutes * 60
@@ -557,9 +568,16 @@ export class OfficeScene {
   }
 
   getTimeLabel(): string {
+    return this.getClockLabel(false)
+  }
+
+  /** 更精细的模拟时钟（可含秒），用于 HUD / 员工卡，让加速一眼可见 */
+  getClockLabel(withSeconds = false): string {
     const h = Math.floor(this.simTime / 3600) % 24
     const m = Math.floor((this.simTime % 3600) / 60)
-    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0')
+    const s = Math.floor(this.simTime % 60)
+    const base = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0')
+    return withSeconds ? base + ':' + String(s).padStart(2, '0') : base
   }
 
   /** 点击昼夜标识：把模拟时间跳到下一阶段起点（白天→傍晚→夜间→白天） */

@@ -718,6 +718,65 @@
   flex-direction: column;
 }
 
+/* 厕所「不要偷看！！！」弹窗 */
+.toilet-peek {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 22, 0.55);
+  backdrop-filter: blur(3px);
+  animation: fadeInUp .18s ease both;
+}
+.toilet-peek-box {
+  width: 280px;
+  padding: 24px 22px 20px;
+  text-align: center;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 107, 157, 0.45);
+  background: linear-gradient(160deg, rgba(40, 22, 40, 0.96), rgba(20, 22, 36, 0.96));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  color: var(--ink);
+}
+.tp-icon {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 107, 157, 0.14);
+  color: #ff6b9d;
+}
+.tp-title {
+  font-size: 19px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  color: #ff6b9d;
+  margin-bottom: 8px;
+}
+.tp-sub {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin-bottom: 16px;
+}
+.tp-btn {
+  width: 100%;
+  padding: 9px 0;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #00d4ff, #a855f7 55%, #ff6b9d);
+}
+.tp-btn:hover { filter: brightness(1.08); }
+
 .ac-head {
   display: flex;
   align-items: center;

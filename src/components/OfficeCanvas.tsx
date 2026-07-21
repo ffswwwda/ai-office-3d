@@ -121,7 +121,9 @@ export function OfficeCanvas() {
   const [menu, setMenu] = useState<AgentMenuState | null>(null)
   const [detailTab, setDetailTab] = useState<'profile' | 'work' | 'actions'>('profile')
   const [workStatus, setWorkStatus] = useState<WorkStatus | null>(null)
+  const [toiletPeek, setToiletPeek] = useState<{ name: string } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const justOpenedRef = useRef(false)
 
   useEffect(() => {
     const host = hostRef.current
@@ -138,9 +140,15 @@ export function OfficeCanvas() {
         agents: sceneRef.current?.getAgents() ?? [],
         pickingTarget: false,
       })
-      setWorkStatus(sceneRef.current?.getAgentWorkStatus(event.agent.id) ?? null)
+      // 防止本次点击的原生 mousedown 随后关闭刚打开的卡片
+      justOpenedRef.current = true
+      window.setTimeout(() => { justOpenedRef.current = false }, 0)
+      setWorkStatus(sceneRef.current?.getAgentWorkStatus(event.agent.id, true) ?? null)
     }
-    const scene = new OfficeScene({ onAgentClick: handleAgentClick })
+    const handleToiletPeek = (name: string) => {
+      setToiletPeek({ name })
+    }
+    const scene = new OfficeScene({ onAgentClick: handleAgentClick, onToiletPeek: handleToiletPeek })
     sceneRef.current = scene
     const ro = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect
@@ -160,6 +168,7 @@ export function OfficeCanvas() {
     // 用 click 代替 pointerdown 避免与按钮 onClick 冲突
     const close = (e: MouseEvent) => {
       if (!menu) return
+      if (justOpenedRef.current) return
       // 点击菜单内部不关闭
       if (menuRef.current && menuRef.current.contains(e.target as Node)) return
       setMenu(null)
@@ -169,6 +178,13 @@ export function OfficeCanvas() {
     document.addEventListener('keydown', key)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key) }
   }, [menu])
+
+  // 厕所「不要偷看！！！」弹窗：几秒后自动消失
+  useEffect(() => {
+    if (!toiletPeek) return
+    const t = window.setTimeout(() => setToiletPeek(null), 3500)
+    return () => window.clearTimeout(t)
+  }, [toiletPeek])
 
   // 监听侧边栏员工点击事件（CustomEvent 从 OfficeSidebar 发出）
   useEffect(() => {
@@ -190,20 +206,20 @@ export function OfficeCanvas() {
         agents,
         pickingTarget: false,
       })
-      setWorkStatus(sceneRef.current!.getAgentWorkStatus(d.agentId) ?? null)
+      setWorkStatus(sceneRef.current!.getAgentWorkStatus(d.agentId, true) ?? null)
     }
     window.addEventListener('office:agent-click', handler)
     return () => window.removeEventListener('office:agent-click', handler)
   }, [])
 
-  // 员工卡打开时，实时刷新工作状态（上班/工作/摸鱼）
+  // 员工卡打开时，实时刷新工作状态（上班/工作/摸鱼）——高频刷新让加速可见
   useEffect(() => {
     if (!menu) { setWorkStatus(null); return }
     const id = menu.agent.id
     const t = setInterval(() => {
-      const st = sceneRef.current?.getAgentWorkStatus(id)
+      const st = sceneRef.current?.getAgentWorkStatus(id, true)
       if (st) setWorkStatus(st)
-    }, 1500)
+    }, 500)
     return () => clearInterval(t)
   }, [menu])
 
@@ -358,6 +374,17 @@ export function OfficeCanvas() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {toiletPeek && (
+        <div className="toilet-peek" onClick={() => setToiletPeek(null)}>
+          <div className="toilet-peek-box" onClick={(e) => e.stopPropagation()}>
+            <div className="tp-icon"><SvgIcon id="i-alert" size={22}/></div>
+            <div className="tp-title">不要偷看！！！</div>
+            <div className="tp-sub">{toiletPeek.name} 正在上厕所，请自觉回避～</div>
+            <button type="button" className="tp-btn" onClick={() => setToiletPeek(null)}>我知道了</button>
           </div>
         </div>
       )}

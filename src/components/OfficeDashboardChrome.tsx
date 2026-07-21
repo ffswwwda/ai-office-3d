@@ -298,13 +298,13 @@ export function OfficeBottomToolbar() {
 
   useEffect(() => {
     const handle = setInterval(() => {
-      // 实时从场景读取
+      // 实时从场景读取（含秒，高频刷新 → 100× 流速时时钟明显加速）
       const scene = getOfficeScene()
       if (scene) {
-        setHudTime(scene.getTimeLabel())
+        setHudTime(scene.getClockLabel(true))
         setPhase(scene.phase())
       }
-    }, 500)
+    }, 200)
     return () => clearInterval(handle)
   }, [])
 
