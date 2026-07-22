@@ -62,7 +62,7 @@ export const AGENT_ROSTER: AgentRosterEntry[] = [
   { id: 'dev',      name: '小创', color: 0xf5c542, task: '新品开发盲盒' },
   { id: 'idea',     name: '小设', color: 0xf97316, task: '抓金矿创意图' },
   { id: 'stress',   name: '小测', color: 0x34c759, task: '虚拟用户压力' },
-  { id: 'pr',       name: '小展', color: 0x9b6dd7, task: '原理展厅画廊' },
+  { id: 'pr',       name: '小方', color: 0x22d3ee, task: '地道表达本地化' },
 ]
 
 export const INITIAL_AGENTS: Agent[] = AGENT_ROSTER.map((entry, i) => {
@@ -136,7 +136,7 @@ export const PROJECTS: Project[] = [
     division: [
       '小灵：VOC 9 维智能打标（动机 / 场景 / 痛点 / 需求…），含否定保护与情感分析。',
       '小预：把真实用户分群放进数字世界，做定价 / 卖点 / 渠道变量的策略推演。',
-      '小展：把工具原理做成双视角（使用 / 看背后工作）可演示的展厅。',
+      '小方：把各市场用户语料转化为地道本地表达，支撑多市场 listing 与客服话术本地化。',
     ],
     progressText: '已完成 DE / US / JP / UK / EU 多站评论打标，标签体系 9 维稳定；数字世界预测 L2 引擎已可纯前端跑通；原理展厅已上线 VOC 打标与需求打分两个 demo。',
     outputs: ['VOC 标签分布报告', '情感极性统计', '预测报告（爆款率 / 翻车风险）', '原理展厅画廊'],
@@ -203,7 +203,7 @@ export const PROJECTS: Project[] = [
     memberIds: ['pr', 'voc', 'score', 'lab', 'dev', 'idea', 'stress'],
     desc: '用 PixiJS 把 7 个模块同事做成可交互的 3D 办公室，串起所有工具与真实项目。',
     division: [
-      '小展：负责场景、员工卡与原理展厅，是"办公室"本身的作者。',
+      '小方：负责多市场地道表达与本地化语料，为办公室提供跨市场语言转换能力。',
       '其余同事：作为工位上的"数字员工"被接入，各自暴露身份 / 能力 / 操作。',
     ],
     progressText: '已上线侧边栏 / 今日日报 / 昼夜循环 / 员工卡；正在接入真实项目弹窗，把每个模块的工作成果落到办公室里。',
@@ -225,4 +225,15 @@ export const PROJECTS: Project[] = [
     outputs: ['压力测试报告', '极端用户画像 Top5', '风险预警清单'],
     link: 'https://ffswwwda.github.io/category-insight-hub/category-insight-hub.html',
   },
+]
+
+/** 会议室：参会专家的能力画像与关键词（用于「建议拉取员工」匹配） */
+export const MEETING_EXPERTS: Array<{ id: string; competency: string; keywords: string[] }> = [
+  { id: 'voc', competency: 'VOC 9 维智能打标与用户反馈洞察', keywords: ['评论', '标签', 'voc', '动机', '场景', '痛点', '情感', '反馈', '打标', '需求', '用户', '评价'] },
+  { id: 'score', competency: '产品需求四维评分（痛点 / 技术 / 市场 / 竞争）', keywords: ['需求', '打分', '评分', '痛点匹配', '技术可行', '市场机会', '竞争差异', '产品', '概念', 'prd', '功能', '开发'] },
+  { id: 'lab', competency: '数字世界多智能体策略仿真', keywords: ['预测', '仿真', '数字世界', '多智能体', '策略', '定价', '卖点', '渠道', '推演', '场景', '趋势', '机会', '爆款'] },
+  { id: 'dev', competency: '新品开发创意生成（TRIZ / SCAMPER）', keywords: ['新品', '创意', 'triz', 'scamper', '创新', '产品开发', '盲盒', 'fabe', 'listing', '详情页', '卖点'] },
+  { id: 'idea', competency: '六维创意矿脉挖掘与视觉概念', keywords: ['创意', '设计', '外观', '矿脉', '场景', '情感', '叙事', '视觉', '概念', '审美', '包装'] },
+  { id: 'stress', competency: '虚拟用户压力测试与极端用户识别', keywords: ['压力', '风险', '极端用户', '反对', '验证', '挑刺', '翻车', '立场', '测试', '预警', '隐患'] },
+  { id: 'pr', competency: '多市场地道表达本地化', keywords: ['本地化', '多市场', '德语', '日语', '英语', '法语', '西语', '表达', '翻译', '文案', 'listing', '文化', '海外', '出海'] },
 ]

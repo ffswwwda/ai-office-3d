@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Sprite, Text, TextStyle } from 'pixi.js'
+import { Application, Container, Graphics, Rectangle, Sprite, Text, TextStyle } from 'pixi.js'
 import type { FederatedPointerEvent } from 'pixi.js'
 import type { Agent } from '@/types/agent'
 import { AGENT_ROSTER, COLORS, DESKS, INITIAL_AGENTS, pickHandoffVisitMessage, SCENE_HEIGHT, SCENE_WIDTH } from '@/scene/layout/officeLayout'
@@ -897,7 +897,7 @@ export class OfficeScene {
     }
     // 门标识（"厕所入口"）— 在隔间前
     const doorSign = new Graphics()
-    doorSign.roundRect(stallStartX - 80, 110, 160, 20, 6)
+    doorSign.roundRect(stallStartX - 66, 110, 132, 20, 6)
     doorSign.fill({ color: 0x4a90d9, alpha: 0.85 })
     map.addChild(doorSign)
     const doorText = new Text({
@@ -907,13 +907,14 @@ export class OfficeScene {
         fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif',
       }),
     })
-    doorText.position.set(stallStartX - 70, 114)
+    doorText.anchor.set(0.5)
+    doorText.position.set(stallStartX, 120)
     doorText.eventMode = 'static'
     doorText.cursor = 'pointer'
     doorText.on('pointertap', () => this.triggerToiletDemo())
     map.addChild(doorText)
 
-    // 左侧绿植
+    // 左侧绿植（养死的绿萝）
     const plant = new Graphics()
     // 花盆
     plant.roundRect(34, 280, 28, 32, 4)
@@ -926,9 +927,13 @@ export class OfficeScene {
       plant.ellipse(lx, ly, 8, 4)
       plant.fill({ color: 0x4a9e6b, alpha: 0.7 + Math.random() * 0.3 })
     }
+    plant.eventMode = 'static'
+    plant.cursor = 'pointer'
+    plant.hitArea = new Rectangle(20, 250, 60, 80)
+    plant.on('pointertap', () => window.dispatchEvent(new CustomEvent('office:plant-click', { detail: { plant: 'left', text: '这是养死的绿萝' } })))
     map.addChild(plant)
 
-    // 右侧绿植
+    // 右侧绿植（另一盆养死的绿萝）
     const plant2 = new Graphics()
     plant2.roundRect(898, 460, 28, 32, 4)
     plant2.fill(0xd4ccc0)
@@ -939,6 +944,10 @@ export class OfficeScene {
       plant2.ellipse(lx, ly, 8, 4)
       plant2.fill({ color: 0x4a9e6b, alpha: 0.7 + Math.random() * 0.3 })
     }
+    plant2.eventMode = 'static'
+    plant2.cursor = 'pointer'
+    plant2.hitArea = new Rectangle(888, 430, 60, 70)
+    plant2.on('pointertap', () => window.dispatchEvent(new CustomEvent('office:plant-click', { detail: { plant: 'right', text: '这是另一盆养死的绿萝' } })))
     map.addChild(plant2)
 
     // 尝试加载图片背景（如已存在）
@@ -950,6 +959,39 @@ export class OfficeScene {
       bg.position.set((SCENE_WIDTH - bgTex.width * scale) / 2, (SCENE_HEIGHT - bgTex.height * scale) / 2)
       map.addChild(bg)
     }
+
+    // 会议室（点击开会 → 打开会议室弹窗）
+    const meeting = new Container()
+    meeting.position.set(480, 576)
+    const mTable = new Graphics()
+    mTable.ellipse(0, 0, 62, 30)
+    mTable.fill({ color: 0x14162a, alpha: 0.92 })
+    mTable.stroke({ color: 0x00d4ff, width: 1.5 })
+    meeting.addChild(mTable)
+    for (let i = 0; i < 6; i++) {
+      const ang = (Math.PI * 2 / 6) * i
+      const chair = new Graphics()
+      chair.circle(Math.cos(ang) * 80, Math.sin(ang) * 36, 7)
+      chair.fill({ color: 0xa855f7, alpha: 0.85 })
+      chair.stroke({ color: 0xffffff, width: 1 })
+      meeting.addChild(chair)
+    }
+    const mLabelBg = new Graphics()
+    mLabelBg.roundRect(-54, -52, 108, 22, 6)
+    mLabelBg.fill({ color: 0x00d4ff, alpha: 0.92 })
+    meeting.addChild(mLabelBg)
+    const mLabel = new Text({
+      text: '会议室 · 点击开会',
+      style: new TextStyle({ fontSize: 11, fill: 0x0a0e27, fontWeight: '700', fontFamily: '-apple-system,BlinkMacSystemFont,sans-serif' }),
+    })
+    mLabel.anchor.set(0.5)
+    mLabel.position.set(0, -41)
+    meeting.addChild(mLabel)
+    meeting.eventMode = 'static'
+    meeting.cursor = 'pointer'
+    meeting.hitArea = new Rectangle(-90, -52, 180, 112)
+    meeting.on('pointertap', () => window.dispatchEvent(new CustomEvent('office:open-meeting')))
+    map.addChild(meeting)
 
     parent.addChildAt(map, 0)
   }
