@@ -13,7 +13,8 @@ import {
   buildTaskOutput,
   type ChatMsg, type MeetingContext,
 } from '@/lib/meetingEngine'
-import { kbOf, describeSources } from '@/lib/employeeKB'
+import { kbOf, describeSources, DATA_SOURCE_REGISTRY } from '@/lib/employeeKB'
+import { getMemory, clearMemory, addMemory, summarizeForMemory } from '@/lib/employeeMemory'
 import { TaskStageBoard } from '@/components/TaskStageBoard'
 
 function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
@@ -142,6 +143,76 @@ function MeetingSummaryPanel({
   )
 }
 
+/** 员工完整档案卡：身份 / 目的 / 工作流 / 技能 / 知识库 / 交付物 / 长期记忆 */
+function EmployeeProfileCard({ id, nonce, onClose }: { id: string; nonce: number; onClose: () => void }) {
+  const kb = kbOf(id)
+  const mem = getMemory(id)
+  return (
+    <div className="mr-profile-overlay" onClick={onClose}>
+      <div className="mr-profile" onClick={(e) => e.stopPropagation()} key={nonce}>
+        <div className="mr-profile-head">
+          <span className="mr-profile-avatar" style={{ background: colorHex(id) }}>{kb.name[0]}</span>
+          <div className="mr-profile-id">
+            <div className="mr-profile-name">{kb.name}</div>
+            <div className="mr-profile-role">{kb.role}</div>
+          </div>
+          <button className="dr-close sm" onClick={onClose}>×</button>
+        </div>
+        <div className="mr-profile-body">
+          <div className="mr-profile-sec">
+            <div className="mr-profile-k"><SvgIcon id="i-target" size={11} /> 岗位目的 / 使命</div>
+            <p>{kb.purpose}</p>
+          </div>
+          <div className="mr-profile-sec">
+            <div className="mr-profile-k"><SvgIcon id="i-steps" size={11} /> 标准工作流</div>
+            <ol className="mr-profile-ol">{kb.workflow.map((w, i) => <li key={i}>{w}</li>)}</ol>
+          </div>
+          <div className="mr-profile-sec">
+            <div className="mr-profile-k"><SvgIcon id="i-gear" size={11} /> 硬技能 / 工具</div>
+            <div className="mr-profile-tags">{kb.skills.map((s) => <span key={s} className="mr-profile-tag">{s}</span>)}</div>
+          </div>
+          <div className="mr-profile-sec">
+            <div className="mr-profile-k"><SvgIcon id="i-plug" size={11} /> 已接入数据源（知识库）</div>
+            <div className="mr-profile-src">
+              {kb.dataSources.map((sid) => {
+                const s = DATA_SOURCE_REGISTRY[sid]
+                return s ? (
+                  <div key={sid} className="mr-profile-src-item">
+                    <b>{s.name}</b>
+                    <span>{s.market} · {s.records.toLocaleString()} 条 · {s.type}</span>
+                  </div>
+                ) : null
+              })}
+            </div>
+          </div>
+          <div className="mr-profile-sec">
+            <div className="mr-profile-k"><SvgIcon id="i-doc" size={11} /> 交付物标准</div>
+            <p>{kb.deliverable}</p>
+          </div>
+          <div className="mr-profile-sec">
+            <div className="mr-profile-k"><SvgIcon id="i-clock" size={11} /> 长期记忆（跨会话 / 跨模型保留）</div>
+            {mem.length === 0 ? (
+              <p className="mr-profile-empty">暂无记忆。完成任务后，关键结论会自动沉淀到这里，下次无论是否换模型，该员工都记得自己做过什么。</p>
+            ) : (
+              <div className="mr-profile-mem">
+                {mem.slice().reverse().slice(0, 14).map((e, i) => (
+                  <div key={i} className="mr-profile-mem-item">
+                    <span className="mr-profile-mem-date">{new Date(e.ts).toLocaleDateString('zh-CN')}</span>
+                    <p>{e.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {mem.length > 0 && (
+              <button className="mr-btn sm mr-profile-clear" onClick={() => { clearMemory(id); onClose(); }}>清空该员工记忆</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function MeetingRoom({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>('setup')
   const [topic, setTopic] = useState('')
@@ -165,13 +236,33 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false)
   const [fs, setFs] = useState(false)
   const [notice, setNotice] = useState('')
+  const [profileId, setProfileId] = useState<string | null>(null)
+  const [profNonce, setProfNonce] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // 真实全屏：把整个会议室 overlay 请求浏览器全屏，充满屏幕（含隐藏浏览器外壳）
+  // 监听 fullscreenchange，保证点按钮 / 按 Esc 都能正确同步状态
+  useEffect(() => {
+    const onFs = () => setFs(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
+
+  const toggleFs = () => {
+    const el = overlayRef.current
+    if (!document.fullscreenElement) {
+      el?.requestFullscreen?.().catch(() => { /* 某些环境（如被 iframe 限制）不支持，忽略 */ })
+    } else {
+      document.exitFullscreen?.().catch(() => {})
+    }
+  }
 
   // 订阅工作区实时项目，让「执行」步看到随阶段推进的进度
   useEffect(() => subscribeLiveProjects(setLiveProjects), [])
@@ -303,6 +394,8 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
           `\n\n> 说明：当前为规则引擎生成的占位交付物（未接入大模型）。在会议室设置中填入 API Key 后，此处会自动替换为该员工基于真实知识库生成的实质内容。`
       }
       updateTask(projectId, t.id, { status: 'done', progress: 100, output: finalOut, doneAt: Date.now() })
+      // 任务完成：把关键结论沉淀进该员工的长期记忆（跨会话 / 跨模型保留）
+      addMemory(t.ownerId, summarizeForMemory(kbOf(t.ownerId), topic, t.title, finalOut))
       scene?.setAgentState(t.ownerId, 'working', '已完成：' + t.title)
       scene?.pushActivity(`${nameOf(t.ownerId)} 交付：${t.title}`, ROSTER[t.ownerId]?.color ?? 0x34c759)
       await new Promise((r) => setTimeout(r, 250))
@@ -330,15 +423,16 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
   const llmOn = isLLMEnabled()
 
   return (
-    <div className="mr-overlay" onClick={onClose}>
-      <div className="mr-card" onClick={(e) => e.stopPropagation()}>
+    <div className="mr-overlay" ref={overlayRef} onClick={onClose}>
+      <div className={'mr-card' + (fs ? ' fs' : '')} onClick={(e) => e.stopPropagation()}>
         <div className="mr-head">
           <div className="mr-title-row">
             <SvgIcon id="i-meeting" size={18} />
             <h3>会议室</h3>
             <span className="mr-badge">多智能体圆桌 · 开会到交付</span>
-            <button className="mr-fs-btn" title={fs ? '退出全屏' : '全屏（左对话 / 右看板）'} onClick={() => setFs((v) => !v)}>
+            <button className="mr-fs-btn" title={fs ? '退出全屏（Esc 也可退出）' : '全屏：充满整个屏幕，左侧对话 / 右侧看板'} onClick={toggleFs}>
               <SvgIcon id={fs ? 'i-minimize' : 'i-expand'} size={14} />
+              <span>{fs ? '退出全屏' : '全屏'}</span>
             </button>
             <button className={'mr-gear' + (llmOn ? ' on' : '')} title="大模型设置（BYOK）" onClick={() => setCfgOpen((v) => !v)}>
               <SvgIcon id="i-gear" size={14} />
@@ -395,12 +489,17 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
                 <div className="mr-section-title"><SvgIcon id="i-users" size={12} /> 参会成员（点击可增减）</div>
                 <div className="mr-members">
                   {allMembers.map((r) => (
-                    <button key={r.id} className={'mr-member' + (invited.includes(r.id) ? ' on' : '')}
-                      style={invited.includes(r.id) ? { borderColor: colorHex(r.id) } : undefined}
-                      onClick={() => toggleInvite(r.id)}>
-                      <span className="mr-member-dot" style={{ background: colorHex(r.id) }} />
-                      {r.name}
-                    </button>
+                    <div key={r.id} className="mr-member-row">
+                      <button className={'mr-member' + (invited.includes(r.id) ? ' on' : '')}
+                        style={invited.includes(r.id) ? { borderColor: colorHex(r.id) } : undefined}
+                        onClick={() => toggleInvite(r.id)}>
+                        <span className="mr-member-dot" style={{ background: colorHex(r.id) }} />
+                        {r.name}
+                      </button>
+                      <button className="mr-member-info" title="查看该员工完整档案（身份/目的/工作流/知识库/记忆）" onClick={() => { setProfileId(r.id); setProfNonce((n) => n + 1) }}>
+                        <SvgIcon id="i-doc" size={12} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -418,7 +517,7 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
               <div className="mr-col mr-col-left">
                 <div className="mr-chips">
                   {invited.map((id) => (
-                    <span key={id} className="mr-chip" style={{ borderColor: colorHex(id) }}>
+                    <span key={id} className="mr-chip clickable" style={{ borderColor: colorHex(id) }} title="点击查看员工完整档案" onClick={() => { setProfileId(id); setProfNonce((n) => n + 1) }}>
                       <span className="mr-chip-dot" style={{ background: colorHex(id) }} />
                       {nameOf(id)}
                     </span>
@@ -458,10 +557,10 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
                 </div>
                 <div className="mr-compose">
                   <textarea className="mr-input" value={draft} rows={2}
-                    placeholder={busy ? '员工们正在回应…' : '提及某人姓名让他发言；说「大家说」让全员发言；否则仅记录你的发言'}
+                    placeholder={busy ? '员工们正在回应…' : '输入后按回车发送；Shift+Enter 换行。提及某人姓名让他发言，说「大家说」让全员发言'}
                     disabled={busy}
                     onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendMessage() }} />
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }} />
                   <button className="mr-btn primary" disabled={busy || !draft.trim()} onClick={sendMessage}>
                     {busy ? '生成中…' : '发送'}
                   </button>
@@ -587,6 +686,7 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
           )}
         </div>
       </div>
+      {profileId && <EmployeeProfileCard id={profileId} nonce={profNonce} onClose={() => setProfileId(null)} />}
     </div>
   )
 }

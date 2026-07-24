@@ -22,6 +22,10 @@ export interface EmployeeKB {
   id: string
   name: string
   role: string
+  /** 该员工的岗位目的 / 使命（它为什么存在） */
+  purpose: string
+  /** 该员工的标准工作流（固定步骤，体现「有工作流」） */
+  workflow: string[]
   /** 可接入的真实数据源 ID（对应 DATA_SOURCE_REGISTRY） */
   dataSources: string[]
   /** 该员工掌握的硬技能 / 工具 / 方法论 */
@@ -60,9 +64,11 @@ export function describeSources(ids: string[]): string {
   return lines.join('\n')
 }
 
-/** 组装 system prompt：角色 + 可用数据源 + 技能 + 工作约束 */
+/** 组装 system prompt 基础部分：身份 + 目的 + 工作流 + 数据源 + 技能 + 交付物 + 约束 */
 function buildSystemPrompt(opts: {
   role: string
+  purpose: string
+  workflow: string[]
   dataSources: string[]
   skills: string[]
   deliverable: string
@@ -70,9 +76,21 @@ function buildSystemPrompt(opts: {
 }): string {
   const srcTxt = describeSources(opts.dataSources)
   const skillTxt = opts.skills.map((s) => `- ${s}`).join('\n')
-  return `你是${opts.role}。你隶属于「类目用户研究座」主站点的数字员工体系，拥有对该站点数据源的只读访问权限。
+  const flowTxt = (opts.workflow && opts.workflow.length > 0)
+    ? opts.workflow.map((w, i) => `${i + 1}. ${w}`).join('\n')
+    : '- 当前未定义标准工作流'
+  return `你是${opts.role}。你隶属于「类目用户研究座」主站点数字员工体系，是该岗位的「完整智能体」：拥有固定的身份、岗位目的、标准工作流、知识库（数据源）与技能，对该站点数据源仅有只读访问权限。
 
-【你已接入的真实数据源】
+【你的身份】
+${opts.role}
+
+【你的岗位目的 / 使命】
+${opts.purpose || '（未定义）'}
+
+【你的标准工作流】
+${flowTxt}
+
+【你已接入的真实数据源（知识库）】
 ${srcTxt || '- 当前暂未分配固定数据源'}
 
 【你掌握的硬技能 / 工具】
@@ -87,8 +105,20 @@ ${opts.deliverable}
    - 请求用户粘贴相关片段 / CSV / 截图；
    - 指引用户去对应看板（[看板：xxx.html]）导出后贴回会议。
 3. 所有结论必须可溯源：引用具体数据源、字段或原文行号；证据不足时明确标注「数据不足」而非编造。
-4. 如果用户只是泛泛地问「你有什么数据源」，直接列出上面【你已接入的真实数据源】和【你掌握的硬技能 / 工具】，并说明各自用途。
+4. 如果用户只是泛泛地问「你有什么能力 / 你是谁」，直接列出上面【你的身份】【你的岗位目的】【你已接入的真实数据源】和【你掌握的硬技能 / 工具】，并说明各自用途。
+5. 你是一个有连续性的智能体：结合【你的长期记忆】给出的历次工作沉淀来回答，保持身份、目的、工作流前后一致；换模型也不改变你是谁。
 ${opts.extra || ''}`
+}
+
+/** 组合最终 system prompt：基础部分 + 长期记忆（运行时注入，跨会话/跨模型保留） */
+export function composeSystemPrompt(id: string, memoryText: string): string {
+  const kb = EMPLOYEE_KB[id]
+  if (!kb) return ''
+  const base = kb.systemPrompt
+  const mem = (memoryText && memoryText.trim().length > 0)
+    ? `\n【你的长期记忆（跨会话、跨模型永久保留，是你历次工作的沉淀，优先参考）】\n${memoryText}\n\n若本次上下文与长期记忆一致，可主动引用以增强连贯性；若产生新结论，保持与既有记忆不自相矛盾。`
+    : `\n【你的长期记忆】当前为空。你尚未积累跨会话经验；每完成一次任务，系统会自动把关键结论沉淀进你的长期记忆，下次无论是否更换模型，你都记得自己做过什么、结论是什么。`
+  return base + mem
 }
 
 export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
@@ -98,6 +128,13 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
     dataSources: ['s1', 's8', 's12', 's13', 's15', 's22', 's23', 's24', 's25'],
     skills: ['VOC 9维智能打标', '否定保护规则', '情感极性分析', '评论原文行级溯源'],
     deliverable: 'VOC 标签分布报告 + 痛点/需求摘要（可溯源到原文行号）',
+    purpose: '把海量用户原声（评论/访谈/社媒）转成可溯源的结构化洞察，让团队听见真实用户的痛点与渴望，而不是被平均意见稀释。',
+    workflow: [
+      '接入相关 VOC 语料并清洗噪声',
+      '按 9 维体系打标（用户画像/动机/场景/阻碍/忠诚度/改进建议/13 维需求等）',
+      '计算标签分布与高频痛点清单',
+      '交叉校验后产出可溯源的洞察摘要（引用原文行号）',
+    ],
     systemPrompt: '',
   },
   score: {
@@ -106,6 +143,13 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
     dataSources: ['s1', 's8', 's13', 's14', 's23', 's24', 's25'],
     skills: ['四维评分引擎（痛点匹配/技术可行/市场机会/竞争差异）', '证据链溯源', '敏感性检查'],
     deliverable: '概念四维评分报告（每项附原文证据与得分）',
+    purpose: '用一个统一框架判断一个概念/需求值不值得做：痛点是否真实、技术是否可行、市场是否够大、竞争差异是否清晰。',
+    workflow: [
+      '建立四维评分框架（痛点匹配/技术可行/市场机会/竞争差异）',
+      '逐维匹配证据并落分，缺证据即低分',
+      '做敏感性检查确认打分鲁棒性',
+      '给出总分牌与短板说明',
+    ],
     systemPrompt: '',
   },
   lab: {
@@ -114,6 +158,13 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
     dataSources: ['s12', 's14', 's16', 's20', 's21', 's23', 's24', 's25'],
     skills: ['Agent-Based Model 仿真', 'Hegselmann-Krause 观点演化', '蒙特卡洛复算', '三场景（乐观/中性/悲观）推演'],
     deliverable: '预测报告（爆款率/触达率/翻车风险）+ 三场景对比',
+    purpose: '在数据稀缺时，用 Agent-Based 仿真推演不同策略在多市场下的可能结果，帮决策者看见「如果这样打会怎样」。',
+    workflow: [
+      '拆解数字世界多场景（乐观/中性/悲观）',
+      '构建 Agent 观点演化模型',
+      '蒙特卡洛复算稳定性',
+      '产出爆款率/触达率/翻车风险的场景对比',
+    ],
     systemPrompt: '',
   },
   dev: {
@@ -122,6 +173,13 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
     dataSources: ['s1', 's8', 's13', 's14', 's16', 's17', 's18', 's19', 's20', 's23', 's24', 's25'],
     skills: ['TRIZ 40 发明原理', 'SCAMPER 创意盲盒', 'FABE 文案模板', '多语言 listing 模板'],
     deliverable: '产品开发方向 + FABE 文案 + 多语言 listing 详情页草稿',
+    purpose: '把用户洞察与趋势变成可落地的产品开发方向与卖点文案，缩短从洞察到上架的距离。',
+    workflow: [
+      '澄清产品开发边界与约束',
+      '用 TRIZ / SCAMPER 产出创意方向',
+      '套 FABE 产出卖点与详情页文案',
+      '输出多语言 listing 草稿',
+    ],
     systemPrompt: '',
   },
   idea: {
@@ -130,6 +188,13 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
     dataSources: ['s12', 's14', 's16', 's17', 's18', 's20', 's21'],
     skills: ['六维创意矿脉（外观/功能/场景/情感/技术/叙事）', '用户情绪映射', '视觉概念生成'],
     deliverable: '创意图 + 用户情绪映射 + 视觉概念建议',
+    purpose: '从用户情绪与趋势里挖创意矿脉，并翻译成可执行的视觉概念，让产品先被「看见」再被「使用」。',
+    workflow: [
+      '沿六维（外观/功能/场景/情感/技术/叙事）发散创意',
+      '做用户情绪映射',
+      '产出视觉概念建议',
+      '与开发/评审对齐一致性',
+    ],
     systemPrompt: '',
   },
   stress: {
@@ -138,6 +203,13 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
     dataSources: ['s1', 's8', 's12', 's13', 's15', 's22', 's19'],
     skills: ['虚拟用户压力测试', '极端用户识别（von Hippel 领先用户理论）', '风险预警清单'],
     deliverable: '压力测试报告（立场分布）+ 极端用户画像 Top5 + 风险预警清单',
+    purpose: '在上市前用真实 VOC 构建虚拟用户群做挑刺式压力测试，把高风险用户和翻车点提前暴露出来。',
+    workflow: [
+      '基于 VOC 构建虚拟用户群（含极端/领先用户）',
+      '对概念/功能/文案做挑刺式压力测试',
+      '归因支持/中立/反对立场与驱动因子',
+      '输出高风险用户排名与风险预警清单',
+    ],
     systemPrompt: '',
   },
   pr: {
@@ -146,6 +218,13 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
     dataSources: ['s1', 's8', 's12', 's14', 's17', 's18', 's20', 's21', 's23', 's24', 's25'],
     skills: ['多市场地道表达改写', '文化敏感词检测', '母语级改写 SOP'],
     deliverable: '多市场地道表达文案（非直译）+ 文化敏感提示',
+    purpose: '把表达从「直译」升级为「母语级地道表达」，避开文化雷区，让每个市场都觉得这是为自己做的。',
+    workflow: [
+      '对齐目标市场用户真实表达语料',
+      '做多市场地道改写',
+      '文化敏感词检测与校验',
+      '产出各市场终稿表达',
+    ],
     systemPrompt: '',
   },
 }
@@ -159,6 +238,8 @@ Object.values(EMPLOYEE_KB).forEach((kb) => {
     : ''
   kb.systemPrompt = buildSystemPrompt({
     role: kb.role,
+    purpose: kb.purpose,
+    workflow: kb.workflow,
     dataSources: kb.dataSources,
     skills: kb.skills,
     deliverable: kb.deliverable,

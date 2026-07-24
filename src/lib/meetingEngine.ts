@@ -3,7 +3,8 @@
  *  保证「当下无密钥也能跑通完整产品」，接入密钥后自动升级为真实生成。
  */
 import { chatOnce } from '@/lib/llm'
-import { kbOf, describeSources } from '@/lib/employeeKB'
+import { kbOf, describeSources, composeSystemPrompt } from '@/lib/employeeKB'
+import { memoryToText } from '@/lib/employeeMemory'
 import { isLLMEnabled } from '@/store/workspaceStore'
 
 export interface ChatMsg {
@@ -39,7 +40,7 @@ export async function buildReply(id: string, ctx: MeetingContext, nameOf: (id: s
 
   if (isLLMEnabled()) {
     try {
-      const sys = `${kb.systemPrompt}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。用第一人称、口语化、2-4 句，不要寒暄标题，直接说观点。`
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。用第一人称、口语化、2-4 句，不要寒暄标题，直接说观点。`
       const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
       const out = await chatOnce(sys, user, { temperature: 0.8 })
       if (out && out.trim().length > 0) return out.trim()
@@ -82,7 +83,7 @@ export async function buildTaskOutput(id: string, title: string, ctx: MeetingCon
   const kb = kbOf(id)
   if (isLLMEnabled()) {
     try {
-      const sys = `${kb.systemPrompt}\n你是会议中被分派执行任务的一员，现在要交付真正的成果（不是占位）。\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n交付要求：用 Markdown，中文，结构清晰、具体可落地。按「一、结论 / 二、依据（引用具体数据源与字段）/ 三、关键要点 / 四、可执行下一步」组织；需要对比、清单或评分时用 Markdown 表格；所有判断必须可溯源到已接入的数据源，证据不足处明确标注「数据不足」而非编造。不要寒暄、不要标题以外的客套。`
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你是会议中被分派执行任务的一员，现在要交付真正的成果（不是占位）。\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n交付要求：用 Markdown，中文，结构清晰、具体可落地。按「一、结论 / 二、依据（引用具体数据源与字段）/ 三、关键要点 / 四、可执行下一步」组织；需要对比、清单或评分时用 Markdown 表格；所有判断必须可溯源到已接入的数据源，证据不足处明确标注「数据不足」而非编造。不要寒暄、不要标题以外的客套。`
       const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n你的任务：${title}\n\n可接入的数据源：${describeSources(kb.dataSources)}\n你掌握的技能：${kb.skills.join('、')}\n期望交付物形态：${kb.deliverable}\n\n近期讨论（请据此收敛你的交付重点）：\n${threadToText(ctx.thread, nameOf)}\n\n请直接产出该任务的最终交付物正文：`
       const out = await chatOnce(sys, user, { temperature: 0.45 })
       if (out && out.trim().length > 0) return out.trim()
@@ -250,7 +251,7 @@ export async function buildStageOutputLLM(
 ): Promise<string | null> {
   const kb = kbOf(id)
   try {
-    const sys = `${kb.systemPrompt}\n你是会议执行阶段「${stageName}」的产出者。请基于你已接入的真实数据源与技能，产出该阶段的实质内容，不要空话套话。\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n要求：中文、Markdown、具体可落地；需要结构化对比时用 Markdown 表格；必须声明引用的数据源；证据不足时明确标注「数据不足」而非编造。不要寒暄、不要标题以外的客套，直接给内容。`
+    const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你是会议执行阶段「${stageName}」的产出者。请基于你已接入的真实数据源与技能，产出该阶段的实质内容，不要空话套话。\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n要求：中文、Markdown、具体可落地；需要结构化对比时用 Markdown 表格；必须声明引用的数据源；证据不足时明确标注「数据不足」而非编造。不要寒暄、不要标题以外的客套，直接给内容。`
     const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n本任务：${title}\n当前阶段：${stageName}（预期产出：${stageHint}）\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n请给出该阶段的实质产出：`
     const out = await chatOnce(sys, user, { temperature: 0.5 })
     return out && out.trim().length > 0 ? out.trim() : null
