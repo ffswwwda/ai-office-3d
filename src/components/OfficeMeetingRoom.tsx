@@ -1,111 +1,145 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { AGENT_ROSTER, MEETING_EXPERTS } from '@/scene/layout/officeLayout'
 import { getOfficeScene } from '@/scene/officeSceneBridge'
+import {
+  addLiveProject, updateTask, updateStage, subscribeLiveProjects,
+  type LiveProject, type ProjectTask,
+  getLLMConfig, setLLMConfig, isLLMEnabled,
+} from '@/store/workspaceStore'
+import {
+  buildReply, buildPlanItems,
+  buildTaskStages, buildStageOutput, buildStageOutputLLM, resolveSpeakers,
+  buildTaskOutput,
+  type ChatMsg, type MeetingContext,
+} from '@/lib/meetingEngine'
+import { kbOf, describeSources } from '@/lib/employeeKB'
+import { TaskStageBoard } from '@/components/TaskStageBoard'
 
 function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
   return <svg viewBox="0 0 24 24" width={size} height={size}><use href={'#' + id}/></svg>
 }
 
 const ROSTER: Record<string, { id: string; name: string; color: number; task: string }> =
-  Object.fromEntries(AGENT_ROSTER.map(r => [r.id, r]))
+  Object.fromEntries(AGENT_ROSTER.map((r) => [r.id, r]))
 const EXPERT: Record<string, { id: string; competency: string; keywords: string[] }> =
-  Object.fromEntries(MEETING_EXPERTS.map(e => [e.id, e]))
+  Object.fromEntries(MEETING_EXPERTS.map((e) => [e.id, e]))
+const nameOf = (id: string) => ROSTER[id]?.name ?? id
+const colorHex = (id: string) => '#' + (ROSTER[id]?.color ?? 0x888888).toString(16).padStart(6, '0')
 
-type Stance = '支持' | '存疑' | '补充'
 type Step = 'setup' | 'discuss' | 'plan' | 'done'
-type Opinion = { stance: Stance; view: string; risk: string; advice: string }
 
 /** 「建议拉取员工」：按主题/目的关键词命中打分排序 */
 function suggestExperts(topic: string, purpose: string) {
   const text = (topic + ' ' + purpose).toLowerCase()
   return MEETING_EXPERTS
-    .map(e => {
-      const hits = e.keywords.filter(k => text.includes(k.toLowerCase()))
+    .map((e) => {
+      const hits = e.keywords.filter((k) => text.includes(k.toLowerCase()))
       return { id: e.id, score: hits.length, hits }
     })
-    .filter(x => x.score > 0)
+    .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
 }
 
-/** 每位员工基于自身能力 + 会议内容生成评估意见（规则引擎，无需 LLM） */
-function buildOpinion(id: string, topic: string, purpose: string, plan: string): Opinion {
-  const expert = EXPERT[id]
-  const text = (topic + ' ' + purpose + ' ' + plan).toLowerCase()
-  const hit = expert.keywords.some(k => text.includes(k.toLowerCase()))
-  const riskWord = /风险|不确定|担心|可能|存疑|隐患|翻车/.test(purpose + plan)
-  const stance: Stance = hit ? (riskWord ? '存疑' : '支持') : '补充'
-
-  const T: Record<string, { view: string; risk: string; advice: string }> = {
-    voc: {
-      view: `从 VOC 角度，用户反馈里和「${topic}」最相关的痛点值得先打标确认。`,
-      risk: '低分评论覆盖到了，但长尾小众需求容易被平均掉，需留意样本偏差。',
-      advice: '先跑一遍 9 维打标，把相关痛点标签拉出来做证据底座，再谈方案。',
-    },
-    score: {
-      view: '用四维评分框一下：痛点匹配、技术可行、市场机会、竞争差异逐项过。',
-      risk: '某维度证据不足时，得分会飘，结论不可信。',
-      advice: '用需求打分引擎给概念出一份可溯源评分报告，每项附原文证据。',
-    },
-    lab: {
-      view: '放进数字世界推演，注入定价 / 卖点 / 渠道变量看群体演化。',
-      risk: '模型对极端分群敏感，未校准时会被平均意见稀释。',
-      advice: '跑 L2 纯前端仿真，给乐观 / 中性 / 悲观三场景差异化输出。',
-    },
-    dev: {
-      view: `用 TRIZ / SCAMPER 给「${topic}」长出几个产品开发方向。`,
-      risk: '创意易发散，不锚定可落地就会变成脑洞集。',
-      advice: '盲盒抽方向 + 配 FABE 文案与多语言 listing 模板。',
-    },
-    idea: {
-      view: '从六维创意矿脉（外观 / 功能 / 场景 / 情感 / 技术 / 叙事）挖可执行的创意图。',
-      risk: '审美主观，脱离市场预期会自嗨。',
-      advice: '出创意图 + 用户情绪映射，对照市场流行设计语言校准。',
-    },
-    stress: {
-      view: '把方案丢进虚拟用户群，找最极端的反对声音。',
-      risk: '翻车点常藏在沉默多数里，不只看支持率。',
-      advice: '跑压力测试，输出风险预警清单与极端用户画像 Top5。',
-    },
-    pr: {
-      view: `「${topic}」要出海，需转成各市场地道表达而非直译。`,
-      risk: '直译会丢转化力，还可能踩文化雷区引发反感。',
-      advice: '用各市场用户语料做母语级改写，附文化敏感词清单。',
-    },
-  }
-  const t = T[id]!
-  return { stance, view: t.view, risk: t.risk, advice: t.advice }
-}
-
-/** 综合规划 + 执行方案文档（Markdown） */
-function buildPlan(topic: string, purpose: string, plan: string, invited: string[], opinions: Record<string, Opinion>) {
+function buildPlanDoc(
+  topic: string, purpose: string, items: Array<{ ownerId: string; title: string }>,
+  messages: ChatMsg[] = [],
+): string {
   const lines: string[] = []
   lines.push('# 会议规划与执行方案')
   lines.push(`> 主题：${topic || '（未填写）'}`)
   lines.push(`> 目的：${purpose || '（未填写）'}`)
+  lines.push(`> 生成时间：${new Date().toLocaleString('zh-CN')}`)
   lines.push('')
   lines.push('## 一、会议目标')
   lines.push(`- 围绕「${topic}」展开，目的为：${purpose}`)
   lines.push('')
-  lines.push('## 二、参会成员评估要点')
-  invited.forEach(id => {
-    const o = opinions[id]; const r = ROSTER[id]
-    lines.push(`- **${r.name}（${EXPERT[id].competency}）** · 立场：${o.stance}`)
-    lines.push(`  - 观点：${o.view}`)
+  lines.push('## 二、执行分工')
+  items.forEach((it, i) => {
+    const r = ROSTER[it.ownerId]
+    lines.push(`${i + 1}. **${r.name}（${EXPERT[it.ownerId].competency}）**：任务——${it.title}`)
   })
   lines.push('')
-  lines.push('## 三、风险清单')
-  lines.push(invited.map(id => `- ${ROSTER[id].name}：${opinions[id].risk}`).join('\n') || '- 暂无')
-  lines.push('')
-  lines.push('## 四、执行分工')
-  invited.forEach(id => {
-    const r = ROSTER[id]
-    lines.push(`- **${r.name}**：任务——${EXPERT[id].competency}；交付物——${opinions[id].advice}`)
+  // 真实讨论要点：直接来自会议室发言，而不是套模板
+  const realMsgs = messages.filter((m) => m.text && m.text.trim())
+  if (realMsgs.length > 0) {
+    lines.push('## 三、会议讨论要点（来自真实发言）')
+    realMsgs.forEach((m) => {
+      const who = m.role === 'user' ? '发起人' : nameOf(m.role)
+      const txt = m.text.replace(/\n+/g, ' ').trim()
+      lines.push(`- **${who}**：${txt.length > 90 ? txt.slice(0, 90) + '…' : txt}`)
+    })
+    lines.push('')
+    lines.push('## 四、分工说明')
+  } else {
+    lines.push('## 三、分工说明')
+  }
+  items.forEach((it) => {
+    const kb = kbOf(it.ownerId)
+    lines.push(`- ${nameOf(it.ownerId)} 将基于以下数据源产出「${kb.deliverable}」：${describeSources(kb.dataSources).replace(/\n/g, '；')}`)
   })
-  lines.push('')
-  lines.push('## 五、发起人方案要点')
-  lines.push(plan || '（未填写详细方案）')
   return lines.join('\n')
+}
+
+/** 把文本作为 .md 文件下载（交付物 / 方案） */
+function downloadMarkdown(filename: string, content: string) {
+  try {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80) + '.md'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1500)
+  } catch { /* ignore */ }
+}
+
+/** 右侧「会议看板」：实时主题 / 目的 / 成员 / 近期观点汇总 */
+function MeetingSummaryPanel({
+  topic, purpose, messages, invited,
+}: {
+  topic: string
+  purpose: string
+  messages: ChatMsg[]
+  invited: string[]
+}) {
+  const opinions = messages
+    .filter((m) => m.role !== 'user' && m.text)
+    .slice(-7)
+    .map((m) => ({ who: nameOf(m.role), text: m.text.replace(/\n+/g, ' ').trim(), color: colorHex(m.role) }))
+  return (
+    <div className="mr-summary">
+      <div className="mr-section-title"><SvgIcon id="i-doc" size={12} /> 会议看板</div>
+      <div className="mr-sum-item"><span className="mr-sum-k">主题</span><span className="mr-sum-v">{topic || '—'}</span></div>
+      <div className="mr-sum-item"><span className="mr-sum-k">目的</span><span className="mr-sum-v">{purpose || '—'}</span></div>
+      <div className="mr-sum-members">
+        {invited.map((id) => (
+          <span key={id} className="mr-chip" style={{ borderColor: colorHex(id) }}>
+            <span className="mr-chip-dot" style={{ background: colorHex(id) }} />
+            {nameOf(id)}
+          </span>
+        ))}
+      </div>
+      <div className="mr-sum-title">近期观点</div>
+      <div className="mr-sum-points">
+        {opinions.length === 0 ? (
+          <div className="mr-sum-empty">讨论开始后，这里实时汇总各方观点</div>
+        ) : (
+          opinions.map((p, i) => (
+            <div key={i} className="mr-sum-point">
+              <span className="mr-sum-dot" style={{ background: p.color }} />
+              <div className="mr-sum-point-body">
+                <b>{p.who}</b>
+                <p>{p.text.length > 120 ? p.text.slice(0, 120) + '…' : p.text}</p>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
 }
 
 function MeetingRoom({ onClose }: { onClose: () => void }) {
@@ -114,11 +148,24 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
   const [purpose, setPurpose] = useState('')
   const [suggested, setSuggested] = useState<Array<{ id: string; score: number; hits: string[] }>>([])
   const [invited, setInvited] = useState<string[]>([])
-  const [plan, setPlan] = useState('')
-  const [opinions, setOpinions] = useState<Record<string, Opinion>>({})
+  const [messages, setMessages] = useState<ChatMsg[]>([])
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [respondingId, setRespondingId] = useState<string | null>(null)
+  const [planItems, setPlanItems] = useState<Array<{ ownerId: string; title: string }>>([])
   const [planDoc, setPlanDoc] = useState('')
-  const [executed, setExecuted] = useState<string[]>([])
+  const [projectId, setProjectId] = useState<string | null>(null)
+  const [liveProjects, setLiveProjects] = useState<LiveProject[]>([])
+  const project = liveProjects.find((p) => p.id === projectId) ?? null
+  const [executing, setExecuting] = useState(false)
+  const [dispatched, setDispatched] = useState(false)
+  const [openTask, setOpenTask] = useState<string | null>(null)
+  const [openStage, setOpenStage] = useState<string | null>(null)
+  const [cfgOpen, setCfgOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [fs, setFs] = useState(false)
+  const [notice, setNotice] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -126,53 +173,150 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // 订阅工作区实时项目，让「执行」步看到随阶段推进的进度
+  useEffect(() => subscribeLiveProjects(setLiveProjects), [])
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [messages, respondingId])
+
+  const ctx = (): MeetingContext => ({ topic, purpose, thread: messages })
+
   const runSuggest = () => {
     const s = suggestExperts(topic, purpose)
     setSuggested(s)
-    // 默认预选命中的员工
-    setInvited(prev => {
-      const base = s.map(x => x.id)
-      const merged = Array.from(new Set([...base, ...prev]))
-      return merged
-    })
+    setInvited((prev) => Array.from(new Set([...s.map((x) => x.id), ...prev])))
   }
 
-  const toggleInvite = (id: string) => {
-    setInvited(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  }
+  const toggleInvite = (id: string) =>
+    setInvited((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
   const startDiscuss = () => {
     if (invited.length === 0) return
-    const ops: Record<string, Opinion> = {}
-    invited.forEach(id => { ops[id] = buildOpinion(id, topic, purpose, plan) })
-    setOpinions(ops)
+    setMessages([{ role: 'user', text: `主题：${topic}\n目的：${purpose}` }])
     setStep('discuss')
   }
 
+  /** 用户发言 → 按意图只让「被点名 / 全员广播」的人回应，否则仅记录、无人打断 */
+  const sendMessage = async () => {
+    const text = draft.trim()
+    if (!text || busy) return
+    const next = [...messages, { role: 'user' as const, text }]
+    setMessages(next)
+    setDraft('')
+    const speakers = resolveSpeakers(text, invited, nameOf)
+    if (speakers.length === 0) {
+      setNotice('（未点名任何人，已记录你的发言；提及某人姓名让他发言，或说「大家说」让全员发言）')
+      setTimeout(() => setNotice(''), 3200)
+      return
+    }
+    setBusy(true)
+    for (const id of speakers) {
+      setRespondingId(id)
+      const reply = await buildReply(id, { topic, purpose, thread: next }, nameOf)
+      setMessages((m) => [...m, { role: id, text: reply }])
+      await new Promise((r) => setTimeout(r, 350))
+    }
+    setRespondingId(null)
+    setBusy(false)
+  }
+
   const makePlan = () => {
-    setPlanDoc(buildPlan(topic, purpose, plan, invited, opinions))
+    const items = buildPlanItems(invited, ctx())
+    setPlanItems(items)
+    setPlanDoc(buildPlanDoc(topic, purpose, items, messages))
     setStep('plan')
   }
 
-  const doExecute = () => {
-    const scene = getOfficeScene()
-    const done: string[] = []
-    if (scene) {
-      invited.forEach(id => {
-        const r = ROSTER[id]
-        const task = EXPERT[id].competency
-        scene.setAgentState(id, 'working', '执行会议任务：' + task)
-        scene.pushActivity(`${r.name} 接受会议任务，开始执行：${task}`, r.color)
-        done.push(r.name)
-      })
-      scene.pushActivity('会议室散会，进入执行阶段', 0x00d4ff)
+  /** 确认方案 → 生成真实项目并写入工作区存储 */
+  const confirmPlan = () => {
+    const pid = 'mtg-' + Date.now().toString(36)
+    const tasks: ProjectTask[] = planItems.map((it, i) => {
+      const seeds = buildTaskStages(it.ownerId, it.title)
+      return {
+        id: pid + '-t' + i,
+        title: it.title,
+        ownerId: it.ownerId,
+        status: 'todo' as const,
+        progress: 0,
+        stages: seeds.map((s, j) => ({
+          id: pid + '-t' + i + '-s' + j,
+          name: s.name,
+          outputHint: s.outputHint,
+          status: 'todo' as const,
+        })),
+      }
+    })
+    const ownerId = planItems[0]?.ownerId ?? invited[0]
+    const proj: LiveProject = {
+      id: pid,
+      name: topic || '未命名会议项目',
+      topic,
+      purpose,
+      status: '进行中',
+      progress: 0,
+      ownerId,
+      memberIds: Array.from(new Set(planItems.map((p) => p.ownerId))),
+      tasks,
+      createdAt: Date.now(),
+      source: 'meeting',
     }
-    setExecuted(done)
+    addLiveProject(proj)
+    setProjectId(pid)
     setStep('done')
+  }
+
+  /** 分派执行：每个任务按阶段推进，真正调用 LLM 产出实质内容（无密钥则规则占位），实时回写进度与产出 */
+  const doExecute = async () => {
+    if (!projectId) return
+    const scene = getOfficeScene()
+    const ctx: MeetingContext = { topic, purpose, thread: messages }
+    const snapshot = project?.tasks ?? []
+    setExecuting(true)
+    setDispatched(true)
+    for (const t of snapshot) {
+      updateTask(projectId, t.id, { status: 'doing', startedAt: Date.now() })
+      scene?.setAgentState(t.ownerId, 'thinking', t.title)
+      scene?.pushActivity(`${nameOf(t.ownerId)} 开始执行：${t.title}`, ROSTER[t.ownerId]?.color ?? 0x00d4ff)
+      const stageOutputs: string[] = []
+      for (const stage of t.stages ?? []) {
+        updateStage(projectId, t.id, stage.id, { status: 'doing', startedAt: Date.now() })
+        scene?.setAgentState(t.ownerId, 'working', stage.name + '…')
+        let out: string
+        if (isLLMEnabled()) {
+          const llm = await buildStageOutputLLM(t.ownerId, t.title, stage.name, stage.outputHint, ctx, nameOf)
+          out = llm ?? buildStageOutput(t.ownerId, t.title, stage.name, stage.outputHint, ctx)
+        } else {
+          out = buildStageOutput(t.ownerId, t.title, stage.name, stage.outputHint, ctx)
+        }
+        await new Promise((r) => setTimeout(r, 360))
+        updateStage(projectId, t.id, stage.id, { status: 'done', output: out, doneAt: Date.now() })
+        stageOutputs.push(`## ${stage.name}\n\n${out}`)
+      }
+      // 最终交付物：LLM 综合产出（含阶段结论），否则用阶段拼接兜底
+      let finalOut: string
+      if (isLLMEnabled()) {
+        const finalLLM = await buildTaskOutput(t.ownerId, t.title, ctx, nameOf)
+        finalOut = `# ${t.title}\n\n> 负责人：${nameOf(t.ownerId)}（${kbOf(t.ownerId).role}）\n> 会议主题：${topic}\n\n` + finalLLM
+      } else {
+        finalOut = `# ${t.title}\n\n> 负责人：${nameOf(t.ownerId)}（${kbOf(t.ownerId).role}）\n\n` + stageOutputs.join('\n\n') +
+          `\n\n> 说明：当前为规则引擎生成的占位交付物（未接入大模型）。在会议室设置中填入 API Key 后，此处会自动替换为该员工基于真实知识库生成的实质内容。`
+      }
+      updateTask(projectId, t.id, { status: 'done', progress: 100, output: finalOut, doneAt: Date.now() })
+      scene?.setAgentState(t.ownerId, 'working', '已完成：' + t.title)
+      scene?.pushActivity(`${nameOf(t.ownerId)} 交付：${t.title}`, ROSTER[t.ownerId]?.color ?? 0x34c759)
+      await new Promise((r) => setTimeout(r, 250))
+    }
+    setExecuting(false)
   }
 
   const copyPlan = async () => {
     try { await navigator.clipboard.writeText(planDoc); setCopied(true); setTimeout(() => setCopied(false), 1600) } catch { /* ignore */ }
+  }
+
+  const openProjects = () => {
+    // 不关闭会议室：会议室仍在底层，项目看板在其上方弹出，用户可点「返回会议室」回到这里
+    window.dispatchEvent(new CustomEvent('office:open-projects'))
   }
 
   const steps: Array<{ key: Step; label: string; icon: string }> = [
@@ -181,21 +325,31 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     { key: 'plan', label: '规划', icon: 'i-doc' },
     { key: 'done', label: '执行', icon: 'i-zap' },
   ]
-  const stepIdx = steps.findIndex(s => s.key === step)
-
+  const stepIdx = steps.findIndex((s) => s.key === step)
   const allMembers = AGENT_ROSTER
+  const llmOn = isLLMEnabled()
 
   return (
     <div className="mr-overlay" onClick={onClose}>
-      <div className="mr-card" onClick={e => e.stopPropagation()}>
+      <div className="mr-card" onClick={(e) => e.stopPropagation()}>
         <div className="mr-head">
           <div className="mr-title-row">
             <SvgIcon id="i-meeting" size={18} />
             <h3>会议室</h3>
-            <span className="mr-badge">把相关员工拉进来一起想方案</span>
+            <span className="mr-badge">多智能体圆桌 · 开会到交付</span>
+            <button className="mr-fs-btn" title={fs ? '退出全屏' : '全屏（左对话 / 右看板）'} onClick={() => setFs((v) => !v)}>
+              <SvgIcon id={fs ? 'i-minimize' : 'i-expand'} size={14} />
+            </button>
+            <button className={'mr-gear' + (llmOn ? ' on' : '')} title="大模型设置（BYOK）" onClick={() => setCfgOpen((v) => !v)}>
+              <SvgIcon id="i-gear" size={14} />
+              <span className="mr-gear-dot" />
+            </button>
           </div>
           <button className="dr-close" onClick={onClose} aria-label="关闭会议室">×</button>
         </div>
+
+        {/* LLM 设置面板 */}
+        {cfgOpen && <LLMPanel onClose={() => setCfgOpen(false)} />}
 
         {/* 步骤指示 */}
         <div className="mr-steps">
@@ -214,57 +368,42 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
             <div className="mr-setup">
               <div className="mr-field">
                 <label><SvgIcon id="i-target" size={12} /> 本次会议主题</label>
-                <input
-                  className="mr-input" value={topic}
-                  onChange={e => setTopic(e.target.value)}
-                  placeholder="例如：新品类德国站上市打法"
-                />
+                <input className="mr-input" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="例如：新品类德国站上市打法" />
               </div>
               <div className="mr-field">
                 <label><SvgIcon id="i-compass" size={12} /> 目的 / 想解决什么</label>
-                <textarea
-                  className="mr-textarea" value={purpose}
-                  onChange={e => setPurpose(e.target.value)}
-                  placeholder="例如：验证概念可行性，并产出可执行的上市方案"
-                  rows={3}
-                />
+                <textarea className="mr-textarea" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="例如：验证概念可行性，并产出可执行的上市方案" rows={3} />
               </div>
               <button className="mr-btn primary" onClick={runSuggest}>
                 <SvgIcon id="i-users" size={13} /> 建议拉取员工
               </button>
-
               {suggested.length > 0 && (
                 <div className="mr-suggest">
                   <div className="mr-section-title"><SvgIcon id="i-zap" size={12} /> 智能建议（按主题相关性匹配）</div>
                   <div className="mr-suggest-list">
-                    {suggested.map(s => (
+                    {suggested.map((s) => (
                       <div key={s.id} className={'mr-suggest-item' + (invited.includes(s.id) ? ' on' : '')} onClick={() => toggleInvite(s.id)}>
-                        <span className="mr-suggest-dot" style={{ background: '#' + ROSTER[s.id].color.toString(16).padStart(6, '0') }} />
-                        <span className="mr-suggest-name">{ROSTER[s.id].name}</span>
+                        <span className="mr-suggest-dot" style={{ background: colorHex(s.id) }} />
+                        <span className="mr-suggest-name">{nameOf(s.id)}</span>
                         <span className="mr-suggest-hit">{s.hits.slice(0, 3).join(' / ')}</span>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-
               <div className="mr-field" style={{ marginTop: 14 }}>
                 <div className="mr-section-title"><SvgIcon id="i-users" size={12} /> 参会成员（点击可增减）</div>
                 <div className="mr-members">
-                  {allMembers.map(r => (
-                    <button
-                      key={r.id}
-                      className={'mr-member' + (invited.includes(r.id) ? ' on' : '')}
-                      style={invited.includes(r.id) ? { borderColor: '#' + r.color.toString(16).padStart(6, '0') } : undefined}
-                      onClick={() => toggleInvite(r.id)}
-                    >
-                      <span className="mr-member-dot" style={{ background: '#' + r.color.toString(16).padStart(6, '0') }} />
+                  {allMembers.map((r) => (
+                    <button key={r.id} className={'mr-member' + (invited.includes(r.id) ? ' on' : '')}
+                      style={invited.includes(r.id) ? { borderColor: colorHex(r.id) } : undefined}
+                      onClick={() => toggleInvite(r.id)}>
+                      <span className="mr-member-dot" style={{ background: colorHex(r.id) }} />
                       {r.name}
                     </button>
                   ))}
                 </div>
               </div>
-
               <div className="mr-foot">
                 <button className="mr-btn primary" disabled={invited.length === 0} onClick={startDiscuss}>
                   进入讨论（已选 {invited.length} 人）
@@ -273,91 +412,221 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          {/* ── 步骤二：讨论 ── */}
+          {/* ── 步骤二：讨论（多智能体圆桌） ── */}
           {step === 'discuss' && (
-            <div className="mr-discuss">
-              <div className="mr-field">
-                <label><SvgIcon id="i-doc" size={12} /> 你的想法 / 方案（详细输出）</label>
-                <textarea
-                  className="mr-textarea" value={plan}
-                  onChange={e => setPlan(e.target.value)}
-                  placeholder="把你的初步想法、方案要点写在这里，员工会据此给评估意见"
-                  rows={5}
-                />
-              </div>
-              <div className="mr-chips">
-                {invited.map(id => (
-                  <span key={id} className="mr-chip" style={{ borderColor: '#' + ROSTER[id].color.toString(16).padStart(6, '0') }}>
-                    <span className="mr-chip-dot" style={{ background: '#' + ROSTER[id].color.toString(16).padStart(6, '0') }} />
-                    {ROSTER[id].name}
-                  </span>
-                ))}
-              </div>
-              <button className="mr-btn primary" onClick={makePlan}>
-                <SvgIcon id="i-msg" size={13} /> 让 {invited.length} 位员工给出评估
-              </button>
-
-              {Object.keys(opinions).length > 0 && (
-                <div className="mr-opinions">
-                  {invited.map(id => {
-                    const o = opinions[id]; const r = ROSTER[id]
-                    return (
-                      <div key={id} className="mr-opinion" style={{ borderLeftColor: '#' + r.color.toString(16).padStart(6, '0') }}>
-                        <div className="mr-opinion-head">
-                          <span className="mr-opinion-avatar" style={{ background: 'linear-gradient(135deg,#00d4ff,#a855f7 55%,#ff6b9d)' }}><SvgIcon id="w-chat" size={14} /></span>
-                          <span className="mr-opinion-name">{r.name}</span>
-                          <span className={'mr-stance'} data-stance={o.stance}>{o.stance}</span>
+            <div className="mr-discuss mr-cols">
+              <div className="mr-col mr-col-left">
+                <div className="mr-chips">
+                  {invited.map((id) => (
+                    <span key={id} className="mr-chip" style={{ borderColor: colorHex(id) }}>
+                      <span className="mr-chip-dot" style={{ background: colorHex(id) }} />
+                      {nameOf(id)}
+                    </span>
+                  ))}
+                </div>
+                {notice && <div className="mr-notice">{notice}</div>}
+                <div className="mr-thread" ref={scrollRef}>
+                  {messages.map((m, i) => {
+                    if (m.role === 'user') {
+                      return (
+                        <div key={i} className="mr-msg user">
+                          <div className="mr-bubble user"><p>{m.text}</p></div>
+                          <span className="mr-msg-name">发起人</span>
                         </div>
-                        <div className="mr-opinion-body">
-                          <p><b>观点 · </b>{o.view}</p>
-                          <p><b>风险 · </b>{o.risk}</p>
-                          <p><b>建议 · </b>{o.advice}</p>
+                      )
+                    }
+                    const r = ROSTER[m.role]
+                    return (
+                      <div key={i} className="mr-msg">
+                        <span className="mr-avatar" style={{ background: colorHex(m.role) }}>{r?.name?.[0] ?? '?'}</span>
+                        <div className="mr-bubble">
+                          <span className="mr-msg-name">{r?.name}</span>
+                          <p>{m.text}</p>
                         </div>
                       </div>
                     )
                   })}
+                  {respondingId && (
+                    <div className="mr-msg">
+                      <span className="mr-avatar" style={{ background: colorHex(respondingId) }}>{ROSTER[respondingId]?.name?.[0]}</span>
+                      <div className="mr-bubble">
+                        <span className="mr-msg-name">{ROSTER[respondingId]?.name} 正在发言…</span>
+                        <div className="mr-typing"><span /><span /><span /></div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+                <div className="mr-compose">
+                  <textarea className="mr-input" value={draft} rows={2}
+                    placeholder={busy ? '员工们正在回应…' : '提及某人姓名让他发言；说「大家说」让全员发言；否则仅记录你的发言'}
+                    disabled={busy}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendMessage() }} />
+                  <button className="mr-btn primary" disabled={busy || !draft.trim()} onClick={sendMessage}>
+                    {busy ? '生成中…' : '发送'}
+                  </button>
+                </div>
+                <div className="mr-foot">
+                  <button className="mr-btn primary" disabled={busy} onClick={makePlan}>
+                    <SvgIcon id="i-doc" size={13} /> 汇总成执行方案
+                  </button>
+                </div>
+              </div>
+              <div className="mr-col mr-col-right">
+                <MeetingSummaryPanel topic={topic} purpose={purpose} messages={messages} invited={invited} />
+              </div>
             </div>
           )}
 
-          {/* ── 步骤三：规划 ── */}
+          {/* ── 步骤三：规划（任务可改负责人） ── */}
           {step === 'plan' && (
             <div className="mr-plan">
-              <div className="mr-section-title"><SvgIcon id="i-doc" size={12} /> 整体规划与执行方案</div>
-              <pre className="mr-plan-doc">{planDoc}</pre>
+              <div className="mr-section-title"><SvgIcon id="i-sliders" size={12} /> 执行分工（可改负责人 / 任务名）</div>
+              <div className="mr-plan-items">
+                {planItems.map((it, i) => (
+                  <div key={i} className="mr-plan-row">
+                    <span className="mr-plan-no">{i + 1}</span>
+                    <input className="mr-input sm" value={it.title} onChange={(e) => {
+                      const v = [...planItems]; v[i] = { ...v[i], title: e.target.value }; setPlanItems(v)
+                    }} />
+                    <select className="mr-select" value={it.ownerId} style={{ borderColor: colorHex(it.ownerId) }} onChange={(e) => {
+                      const v = [...planItems]; v[i] = { ...v[i], ownerId: e.target.value }; setPlanItems(v)
+                    }}>
+                      {AGENT_ROSTER.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <details className="mr-doc-detail" open>
+                <summary><SvgIcon id="i-doc" size={12} /> 查看方案文档（Markdown）</summary>
+                <pre className="mr-plan-doc">{planDoc}</pre>
+              </details>
               <div className="mr-foot">
                 <button className="mr-btn" onClick={copyPlan}>{copied ? '已复制' : '复制方案'}</button>
-                <button className="mr-btn primary" onClick={doExecute}>
-                  <SvgIcon id="i-zap" size={13} /> 分派执行
+                <button className="mr-btn primary" onClick={confirmPlan}>
+                  <SvgIcon id="i-zap" size={13} /> 确认并生成项目
                 </button>
               </div>
             </div>
           )}
 
-          {/* ── 步骤四：执行 ── */}
-          {step === 'done' && (
-            <div className="mr-done">
-              <div className="mr-done-badge">
-                <SvgIcon id="i-zap" size={20} />
-                <span>方案已分派，员工进入执行</span>
+          {/* ── 步骤四：执行（实时产出） ── */}
+          {step === 'done' && project && (
+            <div className="mr-done mr-cols">
+              <div className="mr-col mr-col-left">
+                <div className="mr-done-badge">
+                  <SvgIcon id="i-zap" size={20} />
+                  <span>{executing ? '项目执行中…' : (dispatched ? '项目已分派，员工正在交付' : '项目已生成，可点「分派执行」启动')}</span>
+                </div>
+                <div className="mr-progress">
+                  <div className="mr-progress-track"><div className="mr-progress-fill" style={{ width: project.progress + '%' }} /></div>
+                  <span className="mr-progress-val">{project.progress}%</span>
+                </div>
+                <ul className="mr-task-list">
+                  {project.tasks.map((t) => (
+                    <li key={t.id} className={'mr-task' + (t.status === 'done' ? ' done' : t.status === 'doing' ? ' doing' : '')}>
+                      <span className="mr-task-dot" style={{ background: colorHex(t.ownerId) }} />
+                      <button className="mr-task-main" onClick={() => setOpenTask(openTask === t.id ? null : t.id)}>
+                        <span className="mr-task-name">{t.title}</span>
+                        <span className="mr-task-owner">{nameOf(t.ownerId)} · {t.status === 'done' ? '已交付' : t.status === 'doing' ? '执行中' : '待执行'}</span>
+                      </button>
+                      {openTask === t.id && (
+                        <div className="mr-task-detail">
+                          {t.stages && (
+                            <TaskStageBoard
+                              task={t}
+                              nameOf={nameOf}
+                              colorHex={colorHex}
+                              openStageId={openStage}
+                              onToggleStage={(sid) => setOpenStage(openStage === sid ? null : sid)}
+                            />
+                          )}
+                          {t.output && (
+                            <button className="mr-btn sm" onClick={() => downloadMarkdown(`${topic || '交付物'}_${nameOf(t.ownerId)}_${t.title}`, t.output!)}>
+                              <SvgIcon id="i-doc" size={12} /> 下载交付物
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mr-foot">
+                  {!dispatched ? (
+                    <button className="mr-btn primary" onClick={doExecute} disabled={executing}>
+                      <SvgIcon id="i-zap" size={13} /> 分派执行
+                    </button>
+                  ) : (
+                    <button className="mr-btn done-flag" disabled>
+                      <SvgIcon id="i-check" size={13} /> 已分派
+                    </button>
+                  )}
+                  <button className="mr-btn" disabled={!project.tasks.some((t) => t.output)} onClick={() => {
+                    const all = project.tasks.filter((t) => t.output).map((t) => `# ${nameOf(t.ownerId)} · ${t.title}\n\n${t.output}`).join('\n\n---\n\n')
+                    downloadMarkdown(`${topic || '项目'}_全部交付物`, `# ${project.name}\n> 主题：${topic}\n> 目的：${purpose}\n\n${all}`)
+                  }}>下载全部交付物</button>
+                  <button className="mr-btn" onClick={openProjects}>查看项目看板</button>
+                  <button className="mr-btn primary" onClick={onClose}>完成</button>
+                </div>
+                <p className="mr-done-tip">分派后，每人按阶段实时推进并产出真实交付物；点开任务看进度与阶段成果，已交付的可直接下载。也可在左侧栏「项目」随时查看。</p>
               </div>
-              <p className="mr-done-text">
-                已把任务分派给 {executed.length} 位员工，他们在 3D 办公室里已切换为「工作中」状态，实时动态面板可见进度。
-              </p>
-              <ul className="mr-done-list">
-                {executed.map((n, i) => (
-                  <li key={i}><SvgIcon id="i-check" size={12} /> {n} 已开始执行对应任务</li>
-                ))}
-              </ul>
-              <div className="mr-foot">
-                <button className="mr-btn" onClick={copyPlan}>{copied ? '已复制' : '复制方案'}</button>
-                <button className="mr-btn primary" onClick={onClose}>完成</button>
+              <div className="mr-col mr-col-right">
+                <MeetingSummaryPanel topic={topic} purpose={purpose} messages={messages} invited={invited} />
+                <div className="mr-sum-title">任务进度</div>
+                <div className="mr-sum-tasks">
+                  {project.tasks.map((t) => (
+                    <div key={t.id} className="mr-sum-task">
+                      <span className="mr-sum-task-dot" style={{ background: colorHex(t.ownerId) }} />
+                      <span className="mr-sum-task-name">{nameOf(t.ownerId)}</span>
+                      <span className="mr-sum-task-state" data-status={t.status}>{t.status === 'done' ? '已交付' : t.status === 'doing' ? '执行中' : '待执行'}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/* ═════════ LLM 设置面板（BYOK） ═════════ */
+function LLMPanel({ onClose }: { onClose: () => void }) {
+  const [key, setKey] = useState(getLLMConfig().key)
+  const [base, setBase] = useState(getLLMConfig().baseURL)
+  const [model, setModel] = useState(getLLMConfig().model)
+  const [saved, setSaved] = useState(false)
+  const enabled = key.trim().length > 0
+
+  const save = () => {
+    setLLMConfig({ key: key.trim(), baseURL: base.trim() || 'https://api.openai.com/v1', model: model.trim() || 'gpt-4o-mini' })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1600)
+  }
+
+  return (
+    <div className="mr-cfg">
+      <div className="mr-cfg-head">
+        <SvgIcon id="i-gear" size={14} />
+        <span>大模型设置（BYOK · 仅存本地）</span>
+        <button className="dr-close sm" onClick={onClose}>×</button>
+      </div>
+      <div className="mr-cfg-status" data-on={enabled}>{enabled ? '● 已接入大模型：员工将真实生成内容' : '○ 未接入：使用规则引擎（占位产出）'}</div>
+      <div className="mr-field">
+        <label>API Key</label>
+        <input className="mr-input" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-..." />
+      </div>
+      <div className="mr-field">
+        <label>Base URL（OpenAI 兼容）</label>
+        <input className="mr-input" value={base} onChange={(e) => setBase(e.target.value)} placeholder="https://api.openai.com/v1" />
+      </div>
+      <div className="mr-field">
+        <label>模型名</label>
+        <input className="mr-input" value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4o-mini" />
+      </div>
+      <p className="mr-cfg-tip">密钥只保存在你浏览器 localStorage，绝不上传仓库。填好保存后，会议室发言与任务产出会自动切换为真实大模型生成。</p>
+      <button className="mr-btn primary" onClick={save}>{saved ? '已保存' : '保存'}</button>
     </div>
   )
 }

@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getOfficeAgents, subscribeOfficeAgents } from '@/store/officeStore'
 import { AGENT_ROSTER, PROJECTS } from '@/scene/layout/officeLayout'
+import { getLiveProjects, subscribeLiveProjects, deleteLiveProject, type LiveProject } from '@/store/workspaceStore'
 import type { Agent } from '@/types/agent'
+import { TaskStageBoard } from '@/components/TaskStageBoard'
 import { QUICK_TOOLS } from '@/config'
 import { getOfficeScene } from '@/scene/officeSceneBridge'
 function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
@@ -863,14 +865,30 @@ function RankBlock({ tone, icon, title, items }: { tone: string; icon: string; t
 }
 
 /* ═════════ 真实项目弹窗（主从布局）════════ */
-export function OfficeProjectsModal({ onClose }: { onClose: () => void }) {
-  const [activeId, setActiveId] = useState<string>(PROJECTS[0]?.id ?? '')
-  const active = PROJECTS.find(p => p.id === activeId) ?? PROJECTS[0]
+export function OfficeProjectsModal({ onClose, backToMeeting }: { onClose: () => void; backToMeeting?: boolean }) {
+  const [live, setLive] = useState<LiveProject[]>(getLiveProjects())
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null)
+  const [openStageId, setOpenStageId] = useState<string | null>(null)
+  useEffect(() => subscribeLiveProjects(setLive), [])
+
+  // 会议生成的实时项目排在前面
+  const all = [...live, ...PROJECTS]
+  const [activeId, setActiveId] = useState<string>(all[0]?.id ?? '')
+  const active = all.find(p => p.id === activeId) ?? all[0]
+  const activeIsLive = live.some(p => p.id === activeId)
+  const handleDelete = (id: string, name: string) => {
+    if (!window.confirm(`确定删除项目「${name}」？此操作不可恢复。`)) return
+    const remaining = live.filter(p => p.id !== id)
+    deleteLiveProject(id)
+    if (id === activeId && remaining[0]) setActiveId(remaining[0].id)
+  }
   const agentName = (id: string) => AGENT_ROSTER.find(r => r.id === id)?.name ?? id
   const agentColor = (id: string) => {
     const c = AGENT_ROSTER.find(r => r.id === id)?.color
     return c != null ? '#' + c.toString(16).padStart(6, '0') : '#888'
   }
+  const liveMemberIds = (p: LiveProject) => p.memberIds
+  const liveProgress = (p: LiveProject) => p.progress
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -885,29 +903,50 @@ export function OfficeProjectsModal({ onClose }: { onClose: () => void }) {
           <div className="proj-title-row">
             <SvgIcon id="i-folder" size={18}/>
             <h3>真实项目看板</h3>
-            <span className="proj-count">{PROJECTS.length} 个进行中 / 规划项目</span>
+            <span className="proj-count">{all.length} 个（含 {live.length} 个会议生成）</span>
           </div>
-          <button className="dr-close" onClick={onClose} aria-label="关闭项目">×</button>
+          {backToMeeting ? (
+            <button className="proj-back" onClick={onClose}>
+              <SvgIcon id="i-arrow-left" size={13} /> 返回会议室
+            </button>
+          ) : (
+            <button className="dr-close" onClick={onClose} aria-label="关闭项目">×</button>
+          )}
         </div>
         <div className="proj-body">
           {/* 左侧主列表 */}
           <div className="proj-list">
-            {PROJECTS.map(p => {
-              const owner = agentName(p.ownerId)
+            {all.map(p => {
+              const isLive = live.some(x => x.id === p.id)
+              const ownerId = isLive ? (p as LiveProject).ownerId : (p as any).ownerId
+              const owner = agentName(ownerId)
+              const status = isLive ? (p as LiveProject).status : (p as any).status
+              const icon = isLive ? 'i-zap' : (p as any).icon
               return (
-                <button
+                <div
                   key={p.id}
-                  type="button"
                   className={'proj-item' + (p.id === activeId ? ' on' : '')}
-                  onClick={() => setActiveId(p.id)}
+                  onClick={() => { setActiveId(p.id); setOpenTaskId(null) }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { setActiveId(p.id); setOpenTaskId(null) } }}
                 >
-                  <span className="proj-item-icon"><SvgIcon id={p.icon} size={15}/></span>
+                  <span className="proj-item-icon"><SvgIcon id={icon} size={15}/></span>
                   <span className="proj-item-main">
-                    <span className="proj-item-name">{p.name}</span>
+                    <span className="proj-item-name">{p.name}{isLive && <span className="proj-live-tag">会议生成</span>}</span>
                     <span className="proj-item-owner">负责人 · {owner}</span>
                   </span>
-                  <span className={'proj-item-status'} data-status={p.status}>{p.status}</span>
-                </button>
+                  <span className={'proj-item-status'} data-status={status}>{status}</span>
+                  {isLive && (
+                    <button
+                      type="button"
+                      className="proj-del"
+                      title="删除项目"
+                      aria-label="删除项目"
+                      onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.name) }}
+                    ><SvgIcon id="i-trash" size={14}/></button>
+                  )}
+                </div>
               )
             })}
           </div>
@@ -915,27 +954,36 @@ export function OfficeProjectsModal({ onClose }: { onClose: () => void }) {
           {active && (
             <div className="proj-detail">
               <div className="proj-detail-head">
-                <span className="proj-detail-icon"><SvgIcon id={active.icon} size={20}/></span>
+                <span className="proj-detail-icon"><SvgIcon id={activeIsLive ? 'i-zap' : (active as any).icon} size={20}/></span>
                 <div>
-                  <div className="proj-detail-name">{active.name}</div>
+                  <div className="proj-detail-name">{active.name}{activeIsLive && <span className="proj-live-tag">会议生成</span>}</div>
                   <div className="proj-detail-tags">
                     <span className="proj-tag" data-status={active.status}>{active.status}</span>
-                    <span className="proj-tag">负责人 {agentName(active.ownerId)}</span>
+                    <span className="proj-tag">负责人 {agentName((active as any).ownerId)}</span>
+                    {activeIsLive && <span className="proj-tag tone-live">实时</span>}
                   </div>
                 </div>
+                {activeIsLive && (
+                  <button
+                    type="button"
+                    className="proj-del-detail"
+                    title="删除项目"
+                    onClick={() => handleDelete(active.id, active.name)}
+                  ><SvgIcon id="i-trash" size={15}/><span>删除</span></button>
+                )}
               </div>
               {/* 进度条 */}
               <div className="proj-progress">
                 <div className="proj-progress-track">
-                  <div className="proj-progress-fill" style={{ width: active.progress + '%' }}/>
+                  <div className="proj-progress-fill" style={{ width: (activeIsLive ? liveProgress(active as LiveProject) : (active as any).progress) + '%' }}/>
                 </div>
-                <span className="proj-progress-val">{active.progress}%</span>
+                <span className="proj-progress-val">{(activeIsLive ? liveProgress(active as LiveProject) : (active as any).progress)}%</span>
               </div>
               {/* 成员 */}
               <div className="proj-section">
                 <div className="proj-section-title"><SvgIcon id="i-users" size={12}/> 参与成员</div>
                 <div className="proj-members">
-                  {active.memberIds.map(id => (
+                  {(activeIsLive ? liveMemberIds(active as LiveProject) : (active as any).memberIds).map((id: string) => (
                     <span key={id} className="proj-member" style={{ borderColor: agentColor(id) }}>
                       <span className="proj-member-dot" style={{ background: agentColor(id) }}/>
                       {agentName(id)}
@@ -943,36 +991,76 @@ export function OfficeProjectsModal({ onClose }: { onClose: () => void }) {
                   ))}
                 </div>
               </div>
-              {/* 简介 */}
-              <div className="proj-section">
-                <div className="proj-section-title"><SvgIcon id="i-doc" size={12}/> 项目简介</div>
-                <p className="proj-text">{active.desc}</p>
-              </div>
-              {/* 分工 */}
-              <div className="proj-section">
-                <div className="proj-section-title"><SvgIcon id="i-sliders" size={12}/> 分工</div>
-                <ul className="proj-list-text">
-                  {active.division.map((d, i) => <li key={i}>{d}</li>)}
-                </ul>
-              </div>
-              {/* 进展 */}
-              <div className="proj-section">
-                <div className="proj-section-title"><SvgIcon id="i-trend" size={12}/> 当前进展</div>
-                <p className="proj-text">{active.progressText}</p>
-              </div>
-              {/* 输出成果 */}
-              <div className="proj-section">
-                <div className="proj-section-title"><SvgIcon id="i-bar" size={12}/> 输出成果</div>
-                <div className="proj-outputs">
-                  {active.outputs.map((o, i) => (
-                    <span key={i} className="proj-output">{o}</span>
-                  ))}
-                </div>
-              </div>
-              {active.link && (
-                <a className="proj-link" href={active.link} target="_blank" rel="noopener noreferrer">
-                  <SvgIcon id="i-link" size={13}/> 打开关联工具
-                </a>
+
+              {activeIsLive ? (
+                <>
+                  {/* 会议主题 / 目的 */}
+                  <div className="proj-section">
+                    <div className="proj-section-title"><SvgIcon id="i-doc" size={12}/> 会议主题与目的</div>
+                    <p className="proj-text"><b>主题：</b>{(active as LiveProject).topic || '—'}</p>
+                    <p className="proj-text"><b>目的：</b>{(active as LiveProject).purpose || '—'}</p>
+                  </div>
+                  {/* 任务与实时产出（阶段可视化看板） */}
+                  <div className="proj-section">
+                    <div className="proj-section-title"><SvgIcon id="i-sliders" size={12}/> 任务进度（点击展开阶段可视化看板）</div>
+                    <ul className="proj-tasks">
+                      {(active as LiveProject).tasks.map((t) => (
+                        <li key={t.id} className={'proj-task' + (t.status === 'done' ? ' done' : t.status === 'doing' ? ' doing' : '')}>
+                          <span className="proj-task-dot" style={{ background: agentColor(t.ownerId) }} />
+                          <div className="proj-task-main">
+                            <button className="proj-task-toggle" onClick={() => setOpenTaskId(openTaskId === t.id ? null : t.id)}>
+                              <span className="proj-task-name">{t.title}</span>
+                              <span className="proj-task-owner">{agentName(t.ownerId)} · {t.status === 'done' ? '已交付' : t.status === 'doing' ? '执行中' : '待执行'} · {t.progress ?? 0}%</span>
+                            </button>
+                            {openTaskId === t.id && t.stages && (
+                              <TaskStageBoard
+                                task={t}
+                                nameOf={agentName}
+                                colorHex={agentColor}
+                                openStageId={openStageId}
+                                onToggleStage={(sid) => setOpenStageId(openStageId === sid ? null : sid)}
+                              />
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* 简介 */}
+                  <div className="proj-section">
+                    <div className="proj-section-title"><SvgIcon id="i-doc" size={12}/> 项目简介</div>
+                    <p className="proj-text">{(active as any).desc}</p>
+                  </div>
+                  {/* 分工 */}
+                  <div className="proj-section">
+                    <div className="proj-section-title"><SvgIcon id="i-sliders" size={12}/> 分工</div>
+                    <ul className="proj-list-text">
+                      {(active as any).division.map((d: string, i: number) => <li key={i}>{d}</li>)}
+                    </ul>
+                  </div>
+                  {/* 进展 */}
+                  <div className="proj-section">
+                    <div className="proj-section-title"><SvgIcon id="i-trend" size={12}/> 当前进展</div>
+                    <p className="proj-text">{(active as any).progressText}</p>
+                  </div>
+                  {/* 输出成果 */}
+                  <div className="proj-section">
+                    <div className="proj-section-title"><SvgIcon id="i-bar" size={12}/> 输出成果</div>
+                    <div className="proj-outputs">
+                      {(active as any).outputs.map((o: string, i: number) => (
+                        <span key={i} className="proj-output">{o}</span>
+                      ))}
+                    </div>
+                  </div>
+                  {(active as any).link && (
+                    <a className="proj-link" href={(active as any).link} target="_blank" rel="noopener noreferrer">
+                      <SvgIcon id="i-link" size={13}/> 打开关联工具
+                    </a>
+                  )}
+                </>
               )}
             </div>
           )}

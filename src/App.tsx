@@ -48,6 +48,13 @@ function App() {
     return () => window.removeEventListener('office:plant-click', onPlant)
   }, [])
 
+  // 会议室执行完成后 → 打开项目看板
+  useEffect(() => {
+    const open = () => setShowProjects(true)
+    window.addEventListener('office:open-projects', open)
+    return () => window.removeEventListener('office:open-projects', open)
+  }, [])
+
   return (
     <div className="office-app">
       <OfficeSidebar onAgentClick={handleAgentClick} activeNav={activeNav} onNavChange={handleNavChange} />
@@ -59,12 +66,12 @@ function App() {
         </main>
       </div>
       <OfficeRightPanel />
-      {showProjects && createPortal(
-        <OfficeProjectsModal onClose={() => setShowProjects(false)} />,
-        document.body,
-      )}
       {showMeeting && createPortal(
         <OfficeMeetingRoom onClose={() => setShowMeeting(false)} />,
+        document.body,
+      )}
+      {showProjects && createPortal(
+        <OfficeProjectsModal onClose={() => setShowProjects(false)} backToMeeting={showMeeting} />,
         document.body,
       )}
       {plantModal.open && createPortal(
