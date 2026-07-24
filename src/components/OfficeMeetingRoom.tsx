@@ -67,6 +67,8 @@ function downloadMarkdown(filename: string, content: string) {
 }
 
 /** 豆包被误派任务时的婉拒话术（外卖员人设，自由发挥） */
+const EMOJIS = ['😀','😂','👍','❤️','🎉','🤔','👏','🔥','✅','⚠️','🤝','💡','📊','📎','🚀','👀','😅','😎','🙏','✨']
+
 const DOUBAO_REFUSALS = [
   '哎哎哎，使不得使不得！我就一送外卖的，你让我落地执行，我电动车上的箱子都得笑掉。这活儿我真接不了，你们继续，我帮你们盯着咖啡凉没凉～',
   '老板你找错人啦。我送外卖在行，送咖啡也行，偶尔插两句外行脑洞也行，但真让我写方案出活儿，我连你们后台按钮都找不着。这任务我拒了，下次点咖啡记得给我五星好评！',
@@ -220,6 +222,7 @@ function MeetingRoom({
   initialMeeting?: {
     topic?: string
     purpose?: string
+    meetingDate?: string
     invited?: string[]
     messages?: ChatMsg[]
     planDoc?: string
@@ -229,6 +232,7 @@ function MeetingRoom({
   const [step, setStep] = useState<Step>(initialMeeting?.step ?? 'setup')
   const [topic, setTopic] = useState(initialMeeting?.topic ?? '')
   const [purpose, setPurpose] = useState(initialMeeting?.purpose ?? '')
+  const [meetingDate, setMeetingDate] = useState(initialMeeting?.meetingDate ?? new Date().toISOString().split('T')[0])
   const [suggested, setSuggested] = useState<Array<{ id: string; score: number; hits: string[] }>>([])
   const [invited, setInvited] = useState<string[]>(initialMeeting?.invited ?? [])
   const [messages, setMessages] = useState<ChatMsg[]>(initialMeeting?.messages ?? [])
@@ -250,13 +254,58 @@ function MeetingRoom({
   const [notice, setNotice] = useState('')
   /** 跨行业访客（外卖员豆包）状态：hidden 未出现 / requesting 申请加入中 / joined 已加入 / declined 已拒绝 */
   const [doubaoState, setDoubaoState] = useState<'hidden' | 'requesting' | 'joined' | 'declined'>('hidden')
+
+  const insertEmoji = (emoji: string) => {
+    setDraft((d) => d + emoji)
+    setShowEmoji(false)
+  }
+
+  const renderAttachments = (list: ChatAttachment[]) => (
+    <div className="mr-attachments">
+      {list.map((att, ai) => {
+        if (att.type === 'image') {
+          return (
+            <div key={ai} className="mr-attachment image">
+              <img src={att.content} alt={att.name} />
+              <button className="mr-attachment-download" onClick={() => downloadAttachment(att)} title={`下载 ${att.name}`}>
+                <SvgIcon id="i-doc" size={12} />
+              </button>
+            </div>
+          )
+        }
+        return (
+          <button key={ai} className="mr-attachment" onClick={() => downloadAttachment(att)} title={`下载 ${att.name}`}>
+            <SvgIcon id={att.type === 'csv' ? 'i-bar' : att.type === 'file' ? 'i-attach' : 'i-doc'} size={12} />
+            <span className="mr-attachment-name">{att.name}</span>
+            <span className="mr-attachment-type">{att.type.toUpperCase()}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  const handleFileSelect = (files: FileList | null, type: 'image' | 'file') => {
+    const file = files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const content = reader.result as string
+      const att: ChatAttachment = { name: file.name, type, content }
+      const label = type === 'image' ? `[图片] ${file.name}` : `[文件] ${file.name}`
+      setMessages((m) => [...m, { role: 'user', text: label, attachments: [att] }])
+    }
+    reader.readAsDataURL(file)
+  }
   const [profileId, setProfileId] = useState<string | null>(null)
   const [profNonce, setProfNonce] = useState(0)
   const [planBuilding, setPlanBuilding] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [showEmoji, setShowEmoji] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const chatRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -301,7 +350,7 @@ function MeetingRoom({
 
   const startDiscuss = () => {
     if (invited.length === 0) return
-    setMessages([{ role: 'user', text: `主题：${topic}\n目的：${purpose}` }])
+    setMessages([{ role: 'user', text: `主题：${topic}\n目的：${purpose}\n会议时间：${meetingDate || '未指定'}` }])
     setDoubaoState('hidden') // 新会议重置访客状态
     setStep('discuss')
   }
@@ -612,6 +661,10 @@ function MeetingRoom({
                 <input className="mr-input" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="例如：新品类德国站上市打法" />
               </div>
               <div className="mr-field">
+                <label><SvgIcon id="i-clock" size={12} /> 会议时间</label>
+                <input className="mr-input" type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.target.value)} />
+              </div>
+              <div className="mr-field">
                 <label><SvgIcon id="i-compass" size={12} /> 目的 / 想解决什么</label>
                 <textarea className="mr-textarea" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="例如：验证概念可行性，并产出可执行的上市方案" rows={3} />
               </div>
@@ -679,7 +732,10 @@ function MeetingRoom({
                     if (m.role === 'user') {
                       return (
                         <div key={i} className="mr-msg user">
-                          <div className="mr-bubble user"><p>{m.text}</p></div>
+                          <div className="mr-bubble user">
+                            <p>{m.text}</p>
+                            {m.attachments && m.attachments.length > 0 && renderAttachments(m.attachments)}
+                          </div>
                           <span className="mr-msg-name">发起人</span>
                         </div>
                       )
@@ -692,17 +748,7 @@ function MeetingRoom({
                         <div className="mr-bubble">
                           <span className="mr-msg-name">{who}</span>
                           <p>{m.text}</p>
-                          {m.attachments && m.attachments.length > 0 && (
-                            <div className="mr-attachments">
-                              {m.attachments.map((att, ai) => (
-                                <button key={ai} className="mr-attachment" onClick={() => downloadAttachment(att)} title={`下载 ${att.name}`}>
-                                  <SvgIcon id={att.type === 'csv' ? 'i-bar' : 'i-doc'} size={12} />
-                                  <span className="mr-attachment-name">{att.name}</span>
-                                  <span className="mr-attachment-type">{att.type.toUpperCase()}</span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
+                          {m.attachments && m.attachments.length > 0 && renderAttachments(m.attachments)}
                         </div>
                       </div>
                     )
@@ -731,15 +777,37 @@ function MeetingRoom({
                     </div>
                   )}
                 </div>
-                <div className="mr-compose">
-                  <textarea className="mr-input" value={draft} rows={2}
-                    placeholder={busy ? '员工们正在回应…' : '输入后按回车发送；Shift+Enter 换行。提及某人姓名让他发言，说「大家说」让全员发言'}
-                    disabled={busy}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }} />
-                  <button className="mr-btn primary mr-send-btn" disabled={busy || !draft.trim()} onClick={sendMessage}>
-                    <SvgIcon id="i-msg" size={14} /> {busy ? '生成中…' : '发送'}
-                  </button>
+                <div className="mr-compose-wrap">
+                  <div className="mr-compose-tools">
+                    <button className={"mr-tool-btn" + (showEmoji ? ' on' : '')} title="表情" onClick={() => setShowEmoji((s) => !s)}>
+                      <SvgIcon id="i-smile" size={15} />
+                    </button>
+                    {showEmoji && (
+                      <div className="mr-emoji-panel">
+                        {EMOJIS.map((e) => (
+                          <button key={e} className="mr-emoji" onClick={() => insertEmoji(e)}>{e}</button>
+                        ))}
+                      </div>
+                    )}
+                    <button className="mr-tool-btn" title="发送图片" onClick={() => imageInputRef.current?.click()}>
+                      <SvgIcon id="i-image" size={15} />
+                    </button>
+                    <input type="file" accept="image/*" style={{ display: 'none' }} ref={imageInputRef} onChange={(e) => handleFileSelect(e.target.files, 'image')} />
+                    <button className="mr-tool-btn" title="发送文件" onClick={() => fileInputRef.current?.click()}>
+                      <SvgIcon id="i-attach" size={15} />
+                    </button>
+                    <input type="file" style={{ display: 'none' }} ref={fileInputRef} onChange={(e) => handleFileSelect(e.target.files, 'file')} />
+                  </div>
+                  <div className="mr-compose">
+                    <textarea className="mr-input" value={draft} rows={fs ? 4 : 2}
+                      placeholder={busy ? '员工们正在回应…' : '输入后按回车发送；Shift+Enter 换行。提及某人姓名让他发言，说「大家说」让全员发言'}
+                      disabled={busy}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }} />
+                    <button className="mr-btn primary mr-send-btn" disabled={busy || !draft.trim()} onClick={sendMessage}>
+                      <SvgIcon id="i-msg" size={14} /> {busy ? '生成中…' : '发送'}
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="mr-col mr-col-right">

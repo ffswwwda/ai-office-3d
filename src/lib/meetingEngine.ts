@@ -9,7 +9,8 @@ import { isLLMEnabled } from '@/store/workspaceStore'
 
 export interface ChatAttachment {
   name: string
-  type: 'markdown' | 'csv' | 'txt'
+  /** markdown/csv/txt：员工生成的可下载文件；image/file：用户从本机上传的附件 */
+  type: 'markdown' | 'csv' | 'txt' | 'image' | 'file'
   content: string
 }
 
@@ -126,8 +127,17 @@ ${threadToText(ctx.thread, nameOf)}
   }
 }
 
-/** 把附件作为文件下载 */
+/** 把附件作为文件下载；图片/文件使用已保存的 data URL */
 export function downloadAttachment(att: ChatAttachment) {
+  if (att.type === 'image' || att.type === 'file') {
+    const a = document.createElement('a')
+    a.href = att.content
+    a.download = att.name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    return
+  }
   const mime = att.type === 'csv' ? 'text/csv;charset=utf-8' : att.type === 'markdown' ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8'
   const blob = new Blob(['\uFEFF' + att.content], { type: mime })
   const url = URL.createObjectURL(blob)
