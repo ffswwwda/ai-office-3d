@@ -16,6 +16,7 @@ import {
 import { kbOf, describeSources, DATA_SOURCE_REGISTRY, isGuest } from '@/lib/employeeKB'
 import { getMemory, clearMemory, addMemory, summarizeForMemory } from '@/lib/employeeMemory'
 import { TaskStageBoard } from '@/components/TaskStageBoard'
+import { chatOnce } from '@/lib/llm'
 
 // html-to-image 通过 public/html-to-image.js 全局注入
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,6 +37,11 @@ const GUEST_ROSTER: Record<string, { id: string; name: string; color: number }> 
 const nameOf = (id: string) => ROSTER[id]?.name ?? GUEST_ROSTER[id]?.name ?? id
 const colorHex = (id: string) => '#' + (ROSTER[id]?.color ?? GUEST_ROSTER[id]?.color ?? 0x888888).toString(16).padStart(6, '0')
 const colorNum = (id: string) => ROSTER[id]?.color ?? GUEST_ROSTER[id]?.color ?? 0x00d4ff
+
+/** 一键测试 API 配置（由用户提供，仅用于演示一键填入） */
+const TEST_API_MODEL = 'deepseek-v4-flash'
+const TEST_API_BASE = 'https://api.deepseek.com'
+const TEST_API_KEY = 'sk-34fc5faa3df94f58afb10c32b2304d61'
 
 type Step = 'setup' | 'discuss' | 'plan' | 'done'
 
@@ -252,6 +258,8 @@ function MeetingRoom({
   const [copied, setCopied] = useState(false)
   const [fs, setFs] = useState(false)
   const [notice, setNotice] = useState('')
+  /** AI 一键测试状态：idle 未测 / testing 测试中 / ok 通过 / error 失败 */
+  const [llmTest, setLlmTest] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
   /** 跨行业访客（外卖员豆包）状态：hidden 未出现 / requesting 申请加入中 / joined 已加入 / declined 已拒绝 */
   const [doubaoState, setDoubaoState] = useState<'hidden' | 'requesting' | 'joined' | 'declined'>('hidden')
 
@@ -358,6 +366,38 @@ function MeetingRoom({
     setMessages([{ role: 'user', text: `主题：${topic}\n目的：${purpose}\n会议时间：${meetingDate || '未指定'}` }])
     setDoubaoState('hidden') // 新会议重置访客状态
     setStep('discuss')
+  }
+
+  /** 一键填入测试 API（仅演示用途：密钥将写入用户浏览器 localStorage） */
+  const fillTestApi = () => {
+    setLLMConfig({ key: TEST_API_KEY, baseURL: TEST_API_BASE, model: TEST_API_MODEL })
+    setNotice('（已填入测试 API，点击“测试 API”验证连通性）')
+    setTimeout(() => setNotice(''), 3000)
+  }
+
+  /** 测试 API：填入 + 发一条极短请求验证连通性 */
+  const testApi = async () => {
+    fillTestApi()
+    setLlmTest('testing')
+    try {
+      const res = await chatOnce(
+        'You are a connectivity tester. Reply with exactly "OK" and nothing else.',
+        'ping',
+        { temperature: 0 },
+      )
+      if (res.trim().toLowerCase().includes('ok')) {
+        setLlmTest('ok')
+        setNotice('✅ API 测试通过，数字员工已接入真实大模型')
+      } else {
+        setLlmTest('error')
+        setNotice('⚠️ API 返回异常：' + res.trim().slice(0, 80))
+      }
+    } catch (e) {
+      setLlmTest('error')
+      const msg = e instanceof Error ? e.message : String(e)
+      setNotice('❌ API 测试失败：' + msg.slice(0, 120))
+    }
+    setTimeout(() => setNotice(''), 5000)
   }
 
   /** 会议进行中随机触发「外卖员豆包」送咖啡并申请加入（每会议最多出现一次）
@@ -785,6 +825,30 @@ function MeetingRoom({
                   </button>
                 </div>
                 {notice && <div className="mr-notice">{notice}</div>}
+                {!isLLMEnabled() && (
+                  <div className="mr-llm-banner">
+                    <div className="mr-llm-banner-icon"><SvgIcon id="i-robot" size={18} /></div>
+                    <div className="mr-llm-banner-body">
+                      <div className="mr-llm-banner-title">AI 尚未配置</div>
+                      <div className="mr-llm-banner-desc">
+                        当前数字员工只会使用规则引擎生成占位回复。填入 API 后，所有人会基于真实知识库与数据源发言。
+                      </div>
+                      <div className="mr-llm-banner-actions">
+                        <button className="mr-btn sm" onClick={fillTestApi}>
+                          <SvgIcon id="i-plug" size={12} /> 一键填入测试 API
+                        </button>
+                        <button className={"mr-btn sm" + (llmTest === 'testing' ? ' loading' : '')} disabled={llmTest === 'testing'} onClick={testApi}>
+                          <SvgIcon id="i-zap" size={12} /> {llmTest === 'testing' ? '测试中…' : '测试 API'}
+                        </button>
+                        <button className="mr-btn sm" onClick={() => setCfgOpen(true)}>
+                          <SvgIcon id="i-gear" size={12} /> 手动配置
+                        </button>
+                      </div>
+                      {llmTest === 'ok' && <div className="mr-llm-banner-status ok">✅ 测试通过，已接入真实大模型</div>}
+                      {llmTest === 'error' && <div className="mr-llm-banner-status err">❌ 测试未通过，请检查网络或密钥</div>}
+                    </div>
+                  </div>
+                )}
                 <div className="mr-thread" ref={scrollRef}>
                   {messages.map((m, i) => {
                     if (m.role === 'user') {

@@ -1722,6 +1722,18 @@ input[type="date"].mr-input { color-scheme: dark; }
 .mr-card:not(.fs) .mr-col-right { border-left: none; border-top: 1px solid var(--border, #2a2d44); padding-left: 0; padding-top: 14px; margin-top: 6px; }
 .mr-notice { font-size: 12px; color: #ffb454; background: rgba(255,180,84,.1); border: 1px solid rgba(255,180,84,.3); border-radius: 8px; padding: 7px 10px; margin: 6px 0; }
 
+/* 聊天框顶部 AI 未配置提示条 */
+.mr-llm-banner { display: flex; gap: 12px; background: rgba(0,212,255,.08); border: 1px solid rgba(0,212,255,.25); border-radius: 12px; padding: 12px 14px; margin: 8px 0 12px; }
+.mr-llm-banner-icon { flex: 0 0 auto; color: #00d4ff; display: flex; align-items: center; }
+.mr-llm-banner-body { flex: 1 1 auto; min-width: 0; }
+.mr-llm-banner-title { color: #fff; font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
+.mr-llm-banner-desc { color: #b8bdd4; font-size: 12px; line-height: 1.55; margin-bottom: 10px; }
+.mr-llm-banner-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mr-llm-banner-status { font-size: 12px; margin-top: 8px; }
+.mr-llm-banner-status.ok { color: #4ade80; }
+.mr-llm-banner-status.err { color: #ff6b6b; }
+.mr-btn.loading { opacity: .7; cursor: wait; }
+
 /* 右侧会议看板 */
 .mr-summary { display: flex; flex-direction: column; gap: 10px; }
 .mr-sum-item { display: flex; gap: 8px; font-size: 12.5px; }
