@@ -602,8 +602,8 @@ function MeetingRoom({
       wrap.style.cssText = 'position:fixed;left:0;top:0;width:760px;z-index:2147483647;background:#14162a;padding:28px 30px;box-sizing:border-box;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
       const header = document.createElement('div')
       header.innerHTML =
-        `<div style="color:#fff;font-size:21px;font-weight:800;margin-bottom:6px;">会议记录 · ${esc(topic || '未命名')}</div>` +
-        `<div style="color:#9aa0c0;font-size:12px;margin-bottom:20px;">${esc(meetingDate || '日期未指定')} · 共 ${messages.length} 条对话</div>`
+        `<div style="color:#fff;font-size:21px;font-weight:800;margin-bottom:6px;">聊天记录 · ${esc(topic || '未命名')}</div>` +
+        `<div style="color:#9aa0c0;font-size:12px;margin-bottom:20px;">${esc(meetingDate || '日期未指定')} · 共 ${messages.length} 条消息</div>`
       wrap.appendChild(header)
 
       for (const m of messages) {
@@ -644,7 +644,7 @@ function MeetingRoom({
       document.body.removeChild(wrap)
       const a = document.createElement('a')
       a.href = dataUrl
-      a.download = `会议记录_${(topic || '未命名').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 40)}_${Date.now()}.png`
+      a.download = `聊天记录_${(topic || '未命名').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 40)}_${Date.now()}.png`
       document.body.appendChild(a)
       a.click()
       a.remove()
