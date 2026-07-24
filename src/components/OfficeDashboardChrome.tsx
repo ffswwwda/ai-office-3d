@@ -2,13 +2,27 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getOfficeAgents, subscribeOfficeAgents } from '@/store/officeStore'
 import { AGENT_ROSTER, PROJECTS } from '@/scene/layout/officeLayout'
-import { getLiveProjects, subscribeLiveProjects, deleteLiveProject, type LiveProject } from '@/store/workspaceStore'
+import { getLiveProjects, subscribeLiveProjects, deleteLiveProject, subscribeHiddenStaticProjectIds, getHiddenStaticProjectIds, hideStaticProject, type LiveProject } from '@/store/workspaceStore'
 import type { Agent } from '@/types/agent'
 import { TaskStageBoard } from '@/components/TaskStageBoard'
 import { QUICK_TOOLS } from '@/config'
 import { getOfficeScene } from '@/scene/officeSceneBridge'
 function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
   return <svg viewBox="0 0 24 24" width={size} height={size}><use href={'#' + id}/></svg>
+}
+
+function downloadDeliverable(projectName: string, taskTitle: string, ownerName: string, content: string) {
+  try {
+    const blob = new Blob(['\uFEFF' + content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${projectName.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 30)}_${ownerName}_${taskTitle.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 30)}.md`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1500)
+  } catch { /* ignore */ }
 }
 
 export function OfficeSidebar({ onAgentClick, activeNav, onNavChange }: {
@@ -867,20 +881,49 @@ function RankBlock({ tone, icon, title, items }: { tone: string; icon: string; t
 /* ═════════ 真实项目弹窗（主从布局）════════ */
 export function OfficeProjectsModal({ onClose, backToMeeting }: { onClose: () => void; backToMeeting?: boolean }) {
   const [live, setLive] = useState<LiveProject[]>(getLiveProjects())
+  const [hiddenStatic, setHiddenStatic] = useState<string[]>(getHiddenStaticProjectIds())
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [openStageId, setOpenStageId] = useState<string | null>(null)
   useEffect(() => subscribeLiveProjects(setLive), [])
+  useEffect(() => subscribeHiddenStaticProjectIds(setHiddenStatic), [])
 
-  // 会议生成的实时项目排在前面
-  const all = [...live, ...PROJECTS]
+  // 会议生成的实时项目排在前面；静态项目支持删除（隐藏）
+  const visibleStatic = PROJECTS.filter((p) => !hiddenStatic.includes(p.id))
+  const all = [...live, ...visibleStatic]
   const [activeId, setActiveId] = useState<string>(all[0]?.id ?? '')
-  const active = all.find(p => p.id === activeId) ?? all[0]
-  const activeIsLive = live.some(p => p.id === activeId)
-  const handleDelete = (id: string, name: string) => {
+  const active = all.find((p) => p.id === activeId) ?? all[0]
+  const activeIsLive = live.some((p) => p.id === activeId)
+  const activeIsStatic = visibleStatic.some((p) => p.id === activeId)
+
+  const handleDelete = (id: string, name: string, isStatic: boolean) => {
     if (!window.confirm(`确定删除项目「${name}」？此操作不可恢复。`)) return
-    const remaining = live.filter(p => p.id !== id)
-    deleteLiveProject(id)
+    if (isStatic) {
+      hideStaticProject(id)
+    } else {
+      deleteLiveProject(id)
+    }
+    const remaining = all.filter((p) => p.id !== id)
     if (id === activeId && remaining[0]) setActiveId(remaining[0].id)
+  }
+
+  const restoreMeeting = (p: LiveProject) => {
+    const snap = p.meetingSnapshot
+    if (!snap) {
+      window.dispatchEvent(new CustomEvent('office:restore-meeting', {
+        detail: { topic: p.topic, purpose: p.purpose, step: 'setup' },
+      }))
+      return
+    }
+    window.dispatchEvent(new CustomEvent('office:restore-meeting', {
+      detail: {
+        topic: snap.topic,
+        purpose: snap.purpose,
+        invited: snap.invited,
+        messages: snap.messages,
+        planDoc: snap.planDoc,
+        step: 'plan',
+      },
+    }))
   }
   const agentName = (id: string) => AGENT_ROSTER.find(r => r.id === id)?.name ?? id
   const agentColor = (id: string) => {
@@ -916,8 +959,9 @@ export function OfficeProjectsModal({ onClose, backToMeeting }: { onClose: () =>
         <div className="proj-body">
           {/* 左侧主列表 */}
           <div className="proj-list">
-            {all.map(p => {
-              const isLive = live.some(x => x.id === p.id)
+            {all.map((p) => {
+              const isLive = live.some((x) => x.id === p.id)
+              const isStatic = visibleStatic.some((x) => x.id === p.id)
               const ownerId = isLive ? (p as LiveProject).ownerId : (p as any).ownerId
               const owner = agentName(ownerId)
               const status = isLive ? (p as LiveProject).status : (p as any).status
@@ -937,15 +981,13 @@ export function OfficeProjectsModal({ onClose, backToMeeting }: { onClose: () =>
                     <span className="proj-item-owner">负责人 · {owner}</span>
                   </span>
                   <span className={'proj-item-status'} data-status={status}>{status}</span>
-                  {isLive && (
-                    <button
-                      type="button"
-                      className="proj-del"
-                      title="删除项目"
-                      aria-label="删除项目"
-                      onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.name) }}
-                    ><SvgIcon id="i-trash" size={14}/></button>
-                  )}
+                  <button
+                    type="button"
+                    className="proj-del"
+                    title="删除项目"
+                    aria-label="删除项目"
+                    onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.name, isStatic) }}
+                  ><SvgIcon id="i-trash" size={14}/></button>
                 </div>
               )
             })}
@@ -963,14 +1005,22 @@ export function OfficeProjectsModal({ onClose, backToMeeting }: { onClose: () =>
                     {activeIsLive && <span className="proj-tag tone-live">实时</span>}
                   </div>
                 </div>
-                {activeIsLive && (
+                <div className="proj-detail-actions">
+                  {activeIsLive && (
+                    <button
+                      type="button"
+                      className="proj-restore-meeting"
+                      title="回到生成该项目时的会议室，恢复当时的上下文"
+                      onClick={() => restoreMeeting(active as LiveProject)}
+                    ><SvgIcon id="i-meeting" size={14}/><span>返回会议室</span></button>
+                  )}
                   <button
                     type="button"
                     className="proj-del-detail"
                     title="删除项目"
-                    onClick={() => handleDelete(active.id, active.name)}
+                    onClick={() => handleDelete(active.id, active.name, activeIsStatic)}
                   ><SvgIcon id="i-trash" size={15}/><span>删除</span></button>
-                )}
+                </div>
               </div>
               {/* 进度条 */}
               <div className="proj-progress">
@@ -1026,6 +1076,30 @@ export function OfficeProjectsModal({ onClose, backToMeeting }: { onClose: () =>
                       ))}
                     </ul>
                   </div>
+
+                  {/* 交付物下载 */}
+                  {(active as LiveProject).tasks.some((t) => t.output) && (
+                    <div className="proj-section">
+                      <div className="proj-section-title"><SvgIcon id="i-doc" size={12}/> 交付物（可下载）</div>
+                      <div className="proj-deliverables">
+                        {(active as LiveProject).tasks.filter((t) => t.output).map((t) => (
+                          <div key={t.id} className="proj-deliverable-card">
+                            <div className="proj-deliverable-meta">
+                              <span className="proj-deliverable-dot" style={{ background: agentColor(t.ownerId) }} />
+                              <span className="proj-deliverable-name">{t.title}</span>
+                              <span className="proj-deliverable-owner">{agentName(t.ownerId)}</span>
+                            </div>
+                            <button
+                              className="proj-deliverable-download"
+                              onClick={() => downloadDeliverable(active.name, t.title, agentName(t.ownerId), t.output!)}
+                            >
+                              <SvgIcon id="i-doc" size={13}/> 下载交付物
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <>

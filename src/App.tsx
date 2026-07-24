@@ -4,12 +4,22 @@ import { OfficeCanvas } from '@/components/OfficeCanvas'
 import { OfficeBottomToolbar, OfficeHeaderStats, OfficeProjectsModal, OfficeRightPanel, OfficeSidebar } from '@/components/OfficeDashboardChrome'
 import { OfficeMeetingRoom } from '@/components/OfficeMeetingRoom'
 import { OfficePlantModal } from '@/components/OfficePlantModal'
+import type { ChatMsg } from '@/lib/meetingEngine'
 import './App.css'
 
 function App() {
   const [activeNav, setActiveNav] = useState('办公室')
   const [showProjects, setShowProjects] = useState(false)
   const [showMeeting, setShowMeeting] = useState(false)
+  const [meetingKey, setMeetingKey] = useState(0)
+  const [meetingInitial, setMeetingInitial] = useState<{
+    topic?: string
+    purpose?: string
+    invited?: string[]
+    messages?: ChatMsg[]
+    planDoc?: string
+    step?: 'setup' | 'discuss' | 'plan' | 'done'
+  } | undefined>(undefined)
   const [plantModal, setPlantModal] = useState<{ open: boolean; text: string }>({ open: false, text: '' })
 
   const handleNavChange = (label: string) => {
@@ -19,6 +29,8 @@ function App() {
       return
     }
     if (label === '会议室') {
+      setMeetingInitial(undefined)
+      setMeetingKey((k) => k + 1)
       setShowMeeting(true)
       return
     }
@@ -33,7 +45,11 @@ function App() {
 
   // 3D 场景里点击「会议室」桌子 → 打开会议室
   useEffect(() => {
-    const open = () => setShowMeeting(true)
+    const open = () => {
+      setMeetingInitial(undefined)
+      setMeetingKey((k) => k + 1)
+      setShowMeeting(true)
+    }
     window.addEventListener('office:open-meeting', open)
     return () => window.removeEventListener('office:open-meeting', open)
   }, [])
@@ -55,6 +71,26 @@ function App() {
     return () => window.removeEventListener('office:open-projects', open)
   }, [])
 
+  // 从项目看板「返回会议室」→ 用快照恢复上下文并重新打开会议室
+  useEffect(() => {
+    const restore = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        topic?: string
+        purpose?: string
+        invited?: string[]
+        messages?: ChatMsg[]
+        planDoc?: string
+        step?: 'setup' | 'discuss' | 'plan' | 'done'
+      }
+      setMeetingInitial(detail)
+      setMeetingKey((k) => k + 1)
+      setShowProjects(false)
+      setShowMeeting(true)
+    }
+    window.addEventListener('office:restore-meeting', restore)
+    return () => window.removeEventListener('office:restore-meeting', restore)
+  }, [])
+
   return (
     <div className="office-app">
       <OfficeSidebar onAgentClick={handleAgentClick} activeNav={activeNav} onNavChange={handleNavChange} />
@@ -67,7 +103,11 @@ function App() {
       </div>
       <OfficeRightPanel />
       {showMeeting && createPortal(
-        <OfficeMeetingRoom onClose={() => setShowMeeting(false)} />,
+        <OfficeMeetingRoom
+          key={meetingKey}
+          onClose={() => { setShowMeeting(false); setMeetingInitial(undefined) }}
+          initialMeeting={meetingInitial}
+        />,
         document.body,
       )}
       {showProjects && createPortal(

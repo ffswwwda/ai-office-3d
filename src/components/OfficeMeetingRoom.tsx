@@ -10,8 +10,8 @@ import {
 import {
   buildReply, buildPlanItems, buildPlanDoc,
   buildTaskStages, buildStageOutput, buildStageOutputLLM, resolveSpeakers,
-  buildTaskOutput,
-  type ChatMsg, type MeetingContext,
+  buildTaskOutput, detectFileRequest, buildChatAttachment, downloadAttachment,
+  type ChatMsg, type MeetingContext, type ChatAttachment,
 } from '@/lib/meetingEngine'
 import { kbOf, describeSources, DATA_SOURCE_REGISTRY, isGuest } from '@/lib/employeeKB'
 import { getMemory, clearMemory, addMemory, summarizeForMemory } from '@/lib/employeeMemory'
@@ -186,18 +186,31 @@ function EmployeeProfileCard({ id, nonce, onClose }: { id: string; nonce: number
   )
 }
 
-function MeetingRoom({ onClose }: { onClose: () => void }) {
-  const [step, setStep] = useState<Step>('setup')
-  const [topic, setTopic] = useState('')
-  const [purpose, setPurpose] = useState('')
+function MeetingRoom({
+  onClose,
+  initialMeeting,
+}: {
+  onClose: () => void
+  initialMeeting?: {
+    topic?: string
+    purpose?: string
+    invited?: string[]
+    messages?: ChatMsg[]
+    planDoc?: string
+    step?: Step
+  }
+}) {
+  const [step, setStep] = useState<Step>(initialMeeting?.step ?? 'setup')
+  const [topic, setTopic] = useState(initialMeeting?.topic ?? '')
+  const [purpose, setPurpose] = useState(initialMeeting?.purpose ?? '')
   const [suggested, setSuggested] = useState<Array<{ id: string; score: number; hits: string[] }>>([])
-  const [invited, setInvited] = useState<string[]>([])
-  const [messages, setMessages] = useState<ChatMsg[]>([])
+  const [invited, setInvited] = useState<string[]>(initialMeeting?.invited ?? [])
+  const [messages, setMessages] = useState<ChatMsg[]>(initialMeeting?.messages ?? [])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [respondingId, setRespondingId] = useState<string | null>(null)
   const [planItems, setPlanItems] = useState<Array<{ ownerId: string; title: string }>>([])
-  const [planDoc, setPlanDoc] = useState('')
+  const [planDoc, setPlanDoc] = useState(initialMeeting?.planDoc ?? '')
   const [projectId, setProjectId] = useState<string | null>(null)
   const [liveProjects, setLiveProjects] = useState<LiveProject[]>([])
   const project = liveProjects.find((p) => p.id === projectId) ?? null
@@ -295,7 +308,7 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
   const sendMessage = async () => {
     const text = draft.trim()
     if (!text || busy) return
-    const next = [...messages, { role: 'user' as const, text }]
+    const next: ChatMsg[] = [...messages, { role: 'user' as const, text }]
     setMessages(next)
     setDraft('')
     const speakers = resolveSpeakers(text, invited, nameOf)
@@ -303,11 +316,26 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     const broadcast = /(大家|所有人|全部|各位|各自|分别|一起|全体|都(来|说|发|表|讲|聊聊|谈谈|说说)|依次|轮到|每人|逐个|挨个|分头|各抒己见|群策群力|都发言|一起说|都来讲|都来聊)/.test(text)
     const isDefaultAll = named.length === 0 && !broadcast
     if (isDefaultAll) setNotice('（未点名具体人员，全员依次发言）')
+
+    // 检测是否要文件：指定人优先，否则找第一个有数据能力的非访客员工
+    const wantsFile = detectFileRequest(text)
+    let fileOwner: string | null = null
+    let attachment: ChatAttachment | null = null
+    if (wantsFile) {
+      fileOwner = named[0] ?? speakers.find((id) => !isGuest(id) && kbOf(id).dataSources.length > 0) ?? null
+      if (fileOwner) {
+        setRespondingId(fileOwner)
+        attachment = await buildChatAttachment(fileOwner, text, { topic, purpose, thread: next }, nameOf)
+      }
+    }
+
     setBusy(true)
     for (const id of speakers) {
       setRespondingId(id)
       const reply = await buildReply(id, { topic, purpose, thread: next }, nameOf)
-      setMessages((m) => [...m, { role: id, text: reply }])
+      const msg: ChatMsg = { role: id, text: reply }
+      if (fileOwner === id && attachment) msg.attachments = [attachment]
+      setMessages((m) => [...m, msg])
       await new Promise((r) => setTimeout(r, 350))
     }
     setRespondingId(null)
@@ -359,6 +387,13 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
       tasks,
       createdAt: Date.now(),
       source: 'meeting',
+      meetingSnapshot: {
+        topic,
+        purpose,
+        invited: invited.slice(),
+        messages: messages.map((m) => ({ ...m })),
+        planDoc,
+      },
     }
     addLiveProject(proj)
     setProjectId(pid)
@@ -609,6 +644,17 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
                         <div className="mr-bubble">
                           <span className="mr-msg-name">{who}</span>
                           <p>{m.text}</p>
+                          {m.attachments && m.attachments.length > 0 && (
+                            <div className="mr-attachments">
+                              {m.attachments.map((att, ai) => (
+                                <button key={ai} className="mr-attachment" onClick={() => downloadAttachment(att)} title={`下载 ${att.name}`}>
+                                  <SvgIcon id={att.type === 'csv' ? 'i-bar' : 'i-doc'} size={12} />
+                                  <span className="mr-attachment-name">{att.name}</span>
+                                  <span className="mr-attachment-type">{att.type.toUpperCase()}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )
@@ -813,6 +859,12 @@ function LLMPanel({ onClose }: { onClose: () => void }) {
   )
 }
 
-export function OfficeMeetingRoom({ onClose }: { onClose: () => void }) {
-  return createPortal(<MeetingRoom onClose={onClose} />, document.body)
+export function OfficeMeetingRoom({
+  onClose,
+  initialMeeting,
+}: {
+  onClose: () => void
+  initialMeeting?: Parameters<typeof MeetingRoom>[0]['initialMeeting']
+}) {
+  return createPortal(<MeetingRoom onClose={onClose} initialMeeting={initialMeeting} />, document.body)
 }

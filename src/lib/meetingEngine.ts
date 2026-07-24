@@ -7,9 +7,16 @@ import { kbOf, describeSources, composeSystemPrompt, isGuest } from '@/lib/emplo
 import { memoryToText } from '@/lib/employeeMemory'
 import { isLLMEnabled } from '@/store/workspaceStore'
 
+export interface ChatAttachment {
+  name: string
+  type: 'markdown' | 'csv' | 'txt'
+  content: string
+}
+
 export interface ChatMsg {
   role: 'user' | string // 'user' 或员工 id
   text: string
+  attachments?: ChatAttachment[]
 }
 
 export interface MeetingContext {
@@ -22,6 +29,109 @@ export interface MeetingContext {
 function threadToText(thread: ChatMsg[], nameOf: (id: string) => string): string {
   const tail = thread.slice(-8)
   return tail.map((m) => (m.role === 'user' ? '发起人：' + m.text : nameOf(m.role) + '：' + m.text)).join('\n')
+}
+
+/** 检测用户是否索要文件（表格/文档/CSV/报告等） */
+export function detectFileRequest(text: string): boolean {
+  return /(表格|csv|excel|xlsx|文档|doc|报告|文件|导出|下载|整理成|输出成|生成.*表|筛选.*表|筛选.*结果|清单.*表|给我.*表|给我.*文件|给我.*报告|发我.*表|发我.*文件|发我.*报告)/i.test(text)
+}
+
+/** 根据请求判断文件类型 */
+export function fileTypeFromRequest(text: string): ChatAttachment['type'] {
+  if (/csv|excel|xlsx|表格|表/i.test(text)) return 'csv'
+  if (/doc|文档|报告|md|markdown/i.test(text)) return 'markdown'
+  return 'txt'
+}
+
+function sanitizeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_').slice(0, 60)
+}
+
+/** 为员工生成聊天文件附件：接入 LLM 时按请求生成真实内容，否则用规则兜底 */
+export async function buildChatAttachment(
+  ownerId: string,
+  requestText: string,
+  ctx: MeetingContext,
+  nameOf: (id: string) => string,
+): Promise<ChatAttachment | null> {
+  const kb = kbOf(ownerId)
+  if (kb.guest) return null // 跨行业访客不生成专业文件
+  const type = fileTypeFromRequest(requestText)
+  const topic = ctx.topic || '会议主题'
+
+  if (isLLMEnabled()) {
+    try {
+      const sys = `${composeSystemPrompt(ownerId, memoryToText(ownerId))}
+用户正在会议室里向你索要一份可下载的文件。请基于会议主题、目的与真实讨论记录，生成文件正文。
+
+要求：
+1. 不要寒暄、不要解释，只输出文件正文。
+2. 文件类型：${type === 'csv' ? 'CSV（首行为表头，逗号分隔，内容用双引号包裹含逗号的字段）' : type === 'markdown' ? 'Markdown 文档' : '纯文本'}
+3. 内容必须能从讨论记录中找到依据，禁止编造未出现的内容。
+4. 若为表格，至少包含「要点 / 提出者 / 依据 / 优先级 / 下一步」等列；若为文档，按「结论 / 依据 / 行动项」组织。`
+      const user = `会议主题：${ctx.topic}
+会议目的：${ctx.purpose}
+
+近期讨论：
+${threadToText(ctx.thread, nameOf)}
+
+用户请求：${requestText}
+
+请直接输出文件正文：`
+      const out = await chatOnce(sys, user, { temperature: 0.4 })
+      if (out && out.trim().length > 0) {
+        return {
+          name: sanitizeFileName(`${topic}_${kb.name}_${type === 'csv' ? '筛选表' : '总结'}`) + (type === 'csv' ? '.csv' : type === 'markdown' ? '.md' : '.txt'),
+          type,
+          content: out.trim(),
+        }
+      }
+    } catch { /* 回退规则 */ }
+  }
+
+  // 规则兜底：基于最近讨论生成一份简单表格/文档
+  const tail = ctx.thread.slice(-12).filter((m) => m.text && m.text.trim())
+  if (type === 'csv') {
+    const lines: string[] = ['要点,提出者,依据,优先级,下一步']
+    tail.forEach((m, i) => {
+      const who = m.role === 'user' ? '发起人' : nameOf(m.role)
+      const summary = m.text.replace(/\n/g, ' ').replace(/"/g, '""').slice(0, 80)
+      lines.push(`"${summary}","${who}","讨论记录 #${i + 1}","P${Math.min(i + 1, 5)}","待收敛"`)
+    })
+    return {
+      name: sanitizeFileName(`${topic}_${kb.name}_筛选表`) + '.csv',
+      type: 'csv',
+      content: lines.join('\n'),
+    }
+  }
+  const lines: string[] = [`# ${topic} · ${kb.name}总结`, '', `> 生成时间：${new Date().toLocaleString('zh-CN')}`, '']
+  lines.push('## 讨论要点')
+  tail.forEach((m, i) => {
+    const who = m.role === 'user' ? '发起人' : nameOf(m.role)
+    lines.push(`${i + 1}. **${who}**：${m.text.replace(/\n+/g, ' ').trim()}`)
+  })
+  lines.push('')
+  lines.push('## 建议下一步')
+  lines.push(`- 由 ${kb.name} 基于 ${kb.dataSources.slice(0, 3).join('、')} 进一步收敛为 ${kb.deliverable}。`)
+  return {
+    name: sanitizeFileName(`${topic}_${kb.name}_总结`) + '.md',
+    type: 'markdown',
+    content: lines.join('\n'),
+  }
+}
+
+/** 把附件作为文件下载 */
+export function downloadAttachment(att: ChatAttachment) {
+  const mime = att.type === 'csv' ? 'text/csv;charset=utf-8' : att.type === 'markdown' ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8'
+  const blob = new Blob(['\uFEFF' + att.content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = att.name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1500)
 }
 
 /** 把员工可访问的数据源格式化成一段上下文，注入 system/user prompt */

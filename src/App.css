@@ -1831,3 +1831,49 @@
 /* ── 档案卡：跨行业访客标记 ── */
 .mr-profile-guest-badge { display: inline-block; margin-left: 0; margin-top: 4px; font-size: 10px; color: #ffb07a; background: rgba(255,138,61,.15); border: 1px solid rgba(255,138,61,.4); border-radius: 999px; padding: 2px 8px; }
 .mr-profile-guest-src { margin: 0; font-size: 12px; line-height: 1.6; color: #d6d6e4; background: rgba(255,138,61,.07); border: 1px dashed rgba(255,138,61,.4); border-radius: 9px; padding: 8px 10px; }
+
+/* ── 聊天文件附件 ── */
+.mr-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.mr-attachment {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(0,212,255,.08); border: 1px solid rgba(0,212,255,.35); border-radius: 8px;
+  padding: 6px 10px; cursor: pointer; color: #b8eaff; font-size: 11.5px;
+  transition: background .15s, border-color .15s;
+}
+.mr-attachment:hover { background: rgba(0,212,255,.16); border-color: #00d4ff; }
+.mr-attachment svg { color: #00d4ff; }
+.mr-attachment-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-attachment-type { font-size: 9.5px; color: #6b8fa8; background: rgba(0,0,0,.2); padding: 1px 5px; border-radius: 4px; }
+
+/* ── 项目看板：详情头部操作 + 返回会议室 ── */
+.proj-detail-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.proj-restore-meeting {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(0,212,255,.1); border: 1px solid rgba(0,212,255,.4); color: #00d4ff;
+  border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-weight: 600;
+}
+.proj-restore-meeting:hover { background: rgba(0,212,255,.18); }
+.proj-del-detail {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.35); color: #ff8989;
+  border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-weight: 600;
+}
+.proj-del-detail:hover { background: rgba(239,68,68,.2); }
+
+/* ── 项目看板：交付物卡片列表 ── */
+.proj-deliverables { display: flex; flex-direction: column; gap: 8px; }
+.proj-deliverable-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: rgba(255,255,255,.04); border: 1px solid var(--border, #2a2d44); border-radius: 10px;
+  padding: 10px 12px;
+}
+.proj-deliverable-meta { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.proj-deliverable-dot { width: 8px; height: 8px; border-radius: 50%; }
+.proj-deliverable-name { font-weight: 700; font-size: 12.5px; color: #e8e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proj-deliverable-owner { font-size: 11px; color: #9a9ab8; margin-left: 4px; }
+.proj-deliverable-download {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(168,85,247,.12); border: 1px solid rgba(168,85,247,.4); color: #d8b4fe;
+  border-radius: 7px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 600; white-space: nowrap;
+}
+.proj-deliverable-download:hover { background: rgba(168,85,247,.22); }

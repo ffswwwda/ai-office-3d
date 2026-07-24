@@ -2,6 +2,7 @@
  *  与 officeStore 同范式：内存状态 + 订阅 + localStorage 持久化。
  */
 import type { Agent } from '@/types/agent'
+import type { ChatMsg } from '@/lib/meetingEngine'
 
 export type TaskStatus = 'todo' | 'doing' | 'done'
 export type StageStatus = 'todo' | 'doing' | 'done'
@@ -29,6 +30,14 @@ export interface ProjectTask {
   stages?: TaskStage[]
 }
 
+export interface MeetingSnapshot {
+  topic: string
+  purpose: string
+  invited: string[]
+  messages: ChatMsg[]
+  planDoc: string
+}
+
 export interface LiveProject {
   id: string
   name: string
@@ -41,6 +50,8 @@ export interface LiveProject {
   tasks: ProjectTask[]
   createdAt: number
   source: 'meeting'
+  /** 生成该项目时的会议室快照，用于后续「返回会议室」恢复上下文 */
+  meetingSnapshot?: MeetingSnapshot
 }
 
 /* ───────── 实时项目 ───────── */
@@ -144,6 +155,55 @@ export function deleteLiveProject(id: string) {
   liveProjects = liveProjects.filter((p) => p.id !== id)
   persistProjects()
   emitProjects()
+}
+
+/* ───────── 静态项目隐藏（让左侧所有项目都支持删除） ───────── */
+const HIDDEN_STATIC_KEY = 'ai-office-hidden-static-projects'
+let hiddenStaticIds: string[] = loadHiddenStaticIds()
+let hiddenListeners: Array<(ids: string[]) => void> = []
+
+function loadHiddenStaticIds(): string[] {
+  try {
+    const raw = localStorage.getItem(HIDDEN_STATIC_KEY)
+    if (!raw) return []
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+function persistHiddenStaticIds() {
+  try {
+    localStorage.setItem(HIDDEN_STATIC_KEY, JSON.stringify(hiddenStaticIds))
+  } catch { /* ignore quota */ }
+}
+
+function emitHiddenStaticIds() {
+  for (const fn of hiddenListeners) fn(hiddenStaticIds.slice())
+}
+
+export function getHiddenStaticProjectIds(): string[] {
+  return hiddenStaticIds.slice()
+}
+
+export function subscribeHiddenStaticProjectIds(fn: (ids: string[]) => void) {
+  hiddenListeners.push(fn)
+  return () => { hiddenListeners = hiddenListeners.filter((l) => l !== fn) }
+}
+
+export function hideStaticProject(id: string) {
+  if (!hiddenStaticIds.includes(id)) {
+    hiddenStaticIds.push(id)
+    persistHiddenStaticIds()
+    emitHiddenStaticIds()
+  }
+}
+
+export function showStaticProject(id: string) {
+  hiddenStaticIds = hiddenStaticIds.filter((x) => x !== id)
+  persistHiddenStaticIds()
+  emitHiddenStaticIds()
 }
 
 /* ───────── LLM(BYOK) 配置 ───────── */
