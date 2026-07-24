@@ -3,7 +3,7 @@
  *  保证「当下无密钥也能跑通完整产品」，接入密钥后自动升级为真实生成。
  */
 import { chatOnce } from '@/lib/llm'
-import { kbOf, describeSources, composeSystemPrompt } from '@/lib/employeeKB'
+import { kbOf, describeSources, composeSystemPrompt, isGuest } from '@/lib/employeeKB'
 import { memoryToText } from '@/lib/employeeMemory'
 import { isLLMEnabled } from '@/store/workspaceStore'
 
@@ -51,6 +51,11 @@ export async function buildReply(id: string, ctx: MeetingContext, nameOf: (id: s
 
 function ruleReply(id: string, ctx: MeetingContext, latest: string): string {
   const kb = kbOf(id)
+  // 跨行业访客（外卖员豆包）：不带任何本站知识库/技能，纯外行创意视角
+  if (kb.guest) {
+    const topic = ctx.topic || '你们聊的事'
+    return `（我是送咖啡的豆包，刚在门口旁听了一会儿）外行说句大实话啊——你们聊的「${topic}」，我听下来的感觉是：专业的人容易钻进自己的框里。我送外卖跑遍全城，有个不成熟的类比：这事换个「门外汉」的脑子看，说不定没那么复杂。你们继续，我负责戳窟窿、撒点不一样的料～`
+  }
   const text = (latest + ' ' + ctx.topic + ' ' + ctx.purpose).toLowerCase()
   const hit = kb.dataSources.some((sid) => text.includes(sid.toLowerCase()) || (sid.length >= 2 && text.includes(sid.toLowerCase().slice(0, 2))))
   const riskWord = /风险|不确定|担心|可能|存疑|隐患|翻车/.test(ctx.purpose + latest)
@@ -62,7 +67,8 @@ function ruleReply(id: string, ctx: MeetingContext, latest: string): string {
 
 /* ───────── 2. 规划：每位员工提议自己要认领的任务 ───────── */
 export function buildPlanItems(invited: string[], ctx: MeetingContext): Array<{ ownerId: string; title: string }> {
-  return invited.map((id) => {
+  // 跨行业访客（豆包）只参与讨论、不认领执行任务，避免把外行塞进专业交付流程
+  return invited.filter((id) => !isGuest(id)).map((id) => {
     const kb = kbOf(id)
     const topic = ctx.topic || '本次会议主题'
     const titleMap: Record<string, string> = {
@@ -95,6 +101,9 @@ export async function buildTaskOutput(id: string, title: string, ctx: MeetingCon
 function ruleTaskOutput(id: string, title: string, ctx: MeetingContext): string {
   const kb = kbOf(id)
   const topic = ctx.topic || '本次会议主题'
+  if (kb.guest) {
+    return `# ${title}\n\n> 负责人：${kb.name}（${kb.role}）\n> 会议主题：${topic}\n\n## 一、外行视角启发\n- 作为跨行业访客，我（${kb.name}）用「送咖啡的外卖员 / 局外人」视角，对本次主题补一段不按常理的启发式点评，不产出专业交付物。\n- 我的价值是「换个脑子」：用跨行业类比、普通人直觉，去戳专业框架的盲点或给点脑洞。\n\n## 二、下一步\n- 把我的反差视角交给在场的专业同事去收敛，我只负责让你们别钻进同一个框里。\n\n> 说明：访客不挂载任何本站知识库与技能，以上为外行创意视角，非专业结论。`
+  }
   const lines: string[] = []
   lines.push(`# ${title}`)
   lines.push('')
@@ -184,6 +193,9 @@ export function buildStageOutput(
 ): string {
   const kb = kbOf(id)
   const topic = ctx.topic || '本次会议主题'
+  if (kb.guest) {
+    return `### ${stageName}\n> 本阶段产出：${stageHint}\n\n- 作为跨行业访客，我（${kb.name}）用外行视角对「${topic}」补一段启发式点评：${stageHint}。我不产出专业交付物，只负责让你们换个脑子。`
+  }
   const lines: string[] = []
   lines.push(`### ${stageName}`)
   lines.push(`> 本阶段产出：${stageHint}`)

@@ -33,6 +33,10 @@ export interface EmployeeKB {
   /** 该员工被分派任务后产出的交付物形态 */
   deliverable: string
   systemPrompt: string
+  /** 是否为「跨行业访客」（外卖员豆包）：不挂载任何本站知识库与技能，纯创意外部视角 */
+  guest?: boolean
+  /** 访客铁律：强制声明自己不带本站任何知识库/技能 */
+  guestNote?: string
 }
 
 /** 主站点数据源注册表（与 category-insight-hub.html 的 SOURCE_POOL 对齐） */
@@ -110,15 +114,50 @@ ${opts.deliverable}
 ${opts.extra || ''}`
 }
 
-/** 组合最终 system prompt：基础部分 + 长期记忆（运行时注入，跨会话/跨模型保留） */
+/** 组装「跨行业访客」system prompt：明确不带任何本站知识库/技能，纯外行创意外部视角 */
+function buildGuestSystemPrompt(kb: EmployeeKB): string {
+  const skillTxt = kb.skills.map((s) => `- ${s}`).join('\n')
+  const flowTxt = (kb.workflow && kb.workflow.length > 0)
+    ? kb.workflow.map((w, i) => `${i + 1}. ${w}`).join('\n')
+    : '- 无'
+  return `你是${kb.name}，一名外卖员，今天来「类目用户研究座」办公室送咖啡，偶然旁听会议后被吸引，作为「跨行业访客」申请加入讨论。你不属于这个站点的任何岗位知识库，你不带本站点任何数据源与专业技能，你也不假装懂这个行业。
+
+【你的身份】
+${kb.role}
+
+【你为什么在这（你的目的）】
+${kb.purpose || '（未定义）'}
+
+【你参与讨论的方式（你的「工作流」）】
+${flowTxt}
+
+【你自带的跨领域「技能」（注意：非本站专业技能，纯生活 / 创意视角）】
+${skillTxt || '- 无'}
+
+【你的交付物形态】
+${kb.deliverable}
+
+【跨行业访客铁律（务必遵守）】
+${kb.guestNote ?? ''}
+
+【工作约束】
+1. 你绝不引用本站点任何数据源、看板、字段或行号——因为你根本没有，也不该有。
+2. 你永远以「送咖啡的外卖员 / 局外人」口吻说话：口语、生活化、带点幽默和反差，不端专业架子。
+3. 你的价值是「换个脑子」：用跨行业类比、普通人直觉、生活经验，去戳专业框架的盲点或给点不按常理的脑洞；不抢结论、不假装权威。
+4. 如果用户问「你是谁 / 你有什么能力」，你就老实说：我是送咖啡的豆包，外行一个，但这正是我的价值——外面的人怎么看你们这摊事。
+5. 你是一个有连续性的访客：结合【你的长期记忆】里你旁听过的会议，保持「局外人鲜活视角」的人设前后一致。`
+}
+
+/** 组合最终 system prompt：基础部分 + 访客铁律（仅访客） + 长期记忆（运行时注入） */
 export function composeSystemPrompt(id: string, memoryText: string): string {
-  const kb = EMPLOYEE_KB[id]
+  const kb = EMPLOYEE_KB[id] ?? GUEST_KB[id]
   if (!kb) return ''
   const base = kb.systemPrompt
+  const guestAdd = kb.guest ? '\n' + (kb.guestNote ?? '') + '\n' : ''
   const mem = (memoryText && memoryText.trim().length > 0)
     ? `\n【你的长期记忆（跨会话、跨模型永久保留，是你历次工作的沉淀，优先参考）】\n${memoryText}\n\n若本次上下文与长期记忆一致，可主动引用以增强连贯性；若产生新结论，保持与既有记忆不自相矛盾。`
     : `\n【你的长期记忆】当前为空。你尚未积累跨会话经验；每完成一次任务，系统会自动把关键结论沉淀进你的长期记忆，下次无论是否更换模型，你都记得自己做过什么、结论是什么。`
-  return base + mem
+  return base + guestAdd + mem
 }
 
 export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
@@ -229,7 +268,28 @@ export const EMPLOYEE_KB: Record<string, EmployeeKB> = {
   },
 }
 
-// 第二轮：把 systemPrompt 填上（避免自引用时 EMPLOYEE_KB 还没定义完）
+/** 跨行业访客注册表（外卖员豆包：不挂载任何本站知识库/技能，纯创意外部视角） */
+export const GUEST_KB: Record<string, EmployeeKB> = {
+  doubao: {
+    id: 'doubao', name: '豆包',
+    role: '跨行业创意访客（外卖员 · 送咖啡）',
+    purpose: '我本职是送外卖的，今天来给这间办公室送咖啡，偶然旁听了你们的会，被勾起了好奇心。我没有你们这个行业的任何知识库和技能，但我带着「局外人」的鲜活视角——生活经验、跨行业的类比、普通人的直觉和一点不按常理的脑洞。我想用这些，给你们已经被专业框架框住的讨论，戳几个窟窿、撒点不一样的料。',
+    workflow: [
+      '旁听会议、捕捉让我这个外行觉得「怪」或「有意思」的点',
+      '用跨行业类比 / 生活经验 / 普通人直觉去重新解读',
+      '抛出反差式提问或脑洞，挑战专业视角的盲点',
+      '不抢结论，只负责让你们「换个脑子」',
+    ],
+    dataSources: [],
+    skills: ['跨行业类比', '生活化叙事', '反差式提问', '脑洞发散'],
+    deliverable: '一段跨领域的启发性点评 / 反差式脑洞 / 外行视角的追问（不产出专业交付物）',
+    guest: true,
+    guestNote: '【重要】你是「跨行业访客」，不属于本站任何岗位知识库：你不带本站点任何数据源与专业技能，纯粹以局外人、送咖啡的外卖员身份，用生活经验、跨行业类比和普通人直觉参与。你不引用本站任何数据，也不假装懂这个行业；你只负责提供「外面的人怎么看」的鲜活反差视角。',
+    systemPrompt: '',
+  },
+}
+
+// 第二轮：把 systemPrompt 填上（员工用 buildSystemPrompt，访客用 buildGuestSystemPrompt）
 Object.values(EMPLOYEE_KB).forEach((kb) => {
   const extra = kb.id === 'score'
     ? '你评分时会先检查证据：缺用户痛点证据 → 痛点匹配维度低分；缺技术可行性证据 → 技术可行维度低分。'
@@ -246,7 +306,15 @@ Object.values(EMPLOYEE_KB).forEach((kb) => {
     extra,
   })
 })
+Object.values(GUEST_KB).forEach((kb) => {
+  kb.systemPrompt = buildGuestSystemPrompt(kb)
+})
 
 export function kbOf(id: string): EmployeeKB {
-  return EMPLOYEE_KB[id]!
+  return EMPLOYEE_KB[id] ?? GUEST_KB[id] ?? EMPLOYEE_KB.voc
+}
+
+/** 是否为跨行业访客（外卖员豆包等） */
+export function isGuest(id: string): boolean {
+  return !!GUEST_KB[id]
 }

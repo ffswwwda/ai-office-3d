@@ -13,7 +13,7 @@ import {
   buildTaskOutput,
   type ChatMsg, type MeetingContext,
 } from '@/lib/meetingEngine'
-import { kbOf, describeSources, DATA_SOURCE_REGISTRY } from '@/lib/employeeKB'
+import { kbOf, describeSources, DATA_SOURCE_REGISTRY, isGuest } from '@/lib/employeeKB'
 import { getMemory, clearMemory, addMemory, summarizeForMemory } from '@/lib/employeeMemory'
 import { TaskStageBoard } from '@/components/TaskStageBoard'
 
@@ -25,8 +25,12 @@ const ROSTER: Record<string, { id: string; name: string; color: number; task: st
   Object.fromEntries(AGENT_ROSTER.map((r) => [r.id, r]))
 const EXPERT: Record<string, { id: string; competency: string; keywords: string[] }> =
   Object.fromEntries(MEETING_EXPERTS.map((e) => [e.id, e]))
-const nameOf = (id: string) => ROSTER[id]?.name ?? id
-const colorHex = (id: string) => '#' + (ROSTER[id]?.color ?? 0x888888).toString(16).padStart(6, '0')
+/** 跨行业访客（外卖员豆包）：不在 AGENT_ROSTER，单独登记姓名与颜色 */
+const GUEST_ROSTER: Record<string, { id: string; name: string; color: number }> = {
+  doubao: { id: 'doubao', name: '豆包', color: 0xff8a3d },
+}
+const nameOf = (id: string) => ROSTER[id]?.name ?? GUEST_ROSTER[id]?.name ?? id
+const colorHex = (id: string) => '#' + (ROSTER[id]?.color ?? GUEST_ROSTER[id]?.color ?? 0x888888).toString(16).padStart(6, '0')
 
 type Step = 'setup' | 'discuss' | 'plan' | 'done'
 
@@ -155,6 +159,7 @@ function EmployeeProfileCard({ id, nonce, onClose }: { id: string; nonce: number
           <div className="mr-profile-id">
             <div className="mr-profile-name">{kb.name}</div>
             <div className="mr-profile-role">{kb.role}</div>
+          {kb.guest && <span className="mr-profile-guest-badge">跨行业访客 · 未注入本站知识库</span>}
           </div>
           <button className="dr-close sm" onClick={onClose}>×</button>
         </div>
@@ -173,17 +178,21 @@ function EmployeeProfileCard({ id, nonce, onClose }: { id: string; nonce: number
           </div>
           <div className="mr-profile-sec">
             <div className="mr-profile-k"><SvgIcon id="i-plug" size={11} /> 已接入数据源（知识库）</div>
-            <div className="mr-profile-src">
-              {kb.dataSources.map((sid) => {
-                const s = DATA_SOURCE_REGISTRY[sid]
-                return s ? (
-                  <div key={sid} className="mr-profile-src-item">
-                    <b>{s.name}</b>
-                    <span>{s.market} · {s.records.toLocaleString()} 条 · {s.type}</span>
-                  </div>
-                ) : null
-              })}
-            </div>
+            {kb.guest ? (
+              <p className="mr-profile-guest-src">（作为跨行业访客，我没有任何本站数据源与专业技能——我就是个送咖啡的局外人。我的价值是「外面的人怎么看你们这摊事」，而非任何行业数据。）</p>
+            ) : (
+              <div className="mr-profile-src">
+                {kb.dataSources.map((sid) => {
+                  const s = DATA_SOURCE_REGISTRY[sid]
+                  return s ? (
+                    <div key={sid} className="mr-profile-src-item">
+                      <b>{s.name}</b>
+                      <span>{s.market} · {s.records.toLocaleString()} 条 · {s.type}</span>
+                    </div>
+                  ) : null
+                })}
+              </div>
+            )}
           </div>
           <div className="mr-profile-sec">
             <div className="mr-profile-k"><SvgIcon id="i-doc" size={11} /> 交付物标准</div>
@@ -236,6 +245,8 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false)
   const [fs, setFs] = useState(false)
   const [notice, setNotice] = useState('')
+  /** 跨行业访客（外卖员豆包）状态：hidden 未出现 / requesting 申请加入中 / joined 已加入 / declined 已拒绝 */
+  const [doubaoState, setDoubaoState] = useState<'hidden' | 'requesting' | 'joined' | 'declined'>('hidden')
   const [profileId, setProfileId] = useState<string | null>(null)
   const [profNonce, setProfNonce] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -285,7 +296,32 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
   const startDiscuss = () => {
     if (invited.length === 0) return
     setMessages([{ role: 'user', text: `主题：${topic}\n目的：${purpose}` }])
+    setDoubaoState('hidden') // 新会议重置访客状态
     setStep('discuss')
+  }
+
+  /** 会议进行中随机触发「外卖员豆包」送咖啡并申请加入（每会议最多出现一次） */
+  const maybeDoubaoAppear = () => {
+    if (doubaoState !== 'hidden') return
+    if (invited.length === 0) return
+    if (Math.random() < 0.55) setDoubaoState('requesting')
+  }
+
+  /** 同意豆包加入：她入列参会、读取全部聊天上下文，以跨行业创意视角参与 */
+  const agreeDoubao = () => {
+    setDoubaoState('joined')
+    setInvited((prev) => (prev.includes('doubao') ? prev : [...prev, 'doubao']))
+    setMessages((m) => [...m, {
+      role: 'doubao' as const,
+      text: '（豆包把咖啡放下，拉了把椅子坐下）太好了！那我正式旁听加入啦～刚才你们聊的内容我都听见了，作为送咖啡的外人，我先用一句话表个态：专业的人容易在自己框里打转，我呢，就负责时不时戳个窟窿、撒点不一样的料。你们继续，点我名字我就插嘴哈！',
+    }])
+  }
+
+  /** 拒绝豆包加入：她离开，本会议不再出现 */
+  const declineDoubao = () => {
+    setDoubaoState('declined')
+    setNotice('（豆包：好嘞，咖啡放门口啦，你们忙～）')
+    setTimeout(() => setNotice(''), 3200)
   }
 
   /** 用户发言 → 按意图只让「被点名 / 全员广播」的人回应，否则仅记录、无人打断 */
@@ -299,6 +335,7 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     if (speakers.length === 0) {
       setNotice('（未点名任何人，已记录你的发言；提及某人姓名让他发言，或说「大家说」让全员发言）')
       setTimeout(() => setNotice(''), 3200)
+      maybeDoubaoAppear()
       return
     }
     setBusy(true)
@@ -310,6 +347,7 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     }
     setRespondingId(null)
     setBusy(false)
+    maybeDoubaoAppear()
   }
 
   const makePlan = () => {
@@ -535,23 +573,38 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
                       )
                     }
                     const r = ROSTER[m.role]
+                    const who = nameOf(m.role)
                     return (
                       <div key={i} className="mr-msg">
-                        <span className="mr-avatar" style={{ background: colorHex(m.role) }}>{r?.name?.[0] ?? '?'}</span>
+                        <span className="mr-avatar" style={{ background: colorHex(m.role) }}>{who[0]}</span>
                         <div className="mr-bubble">
-                          <span className="mr-msg-name">{r?.name}</span>
+                          <span className="mr-msg-name">{who}</span>
                           <p>{m.text}</p>
                         </div>
                       </div>
                     )
                   })}
+                  {doubaoState === 'requesting' && (
+                    <div className="mr-guest-request">
+                      <div className="mr-guest-head">
+                        <span className="mr-guest-ava"><SvgIcon id="i-coffee" size={16} /></span>
+                        <span className="mr-guest-name">外卖员 · 豆包</span>
+                        <span className="mr-guest-tag">跨行业访客</span>
+                      </div>
+                      <p className="mr-guest-text">咚咚咚～你们的咖啡到啦！我（豆包）在门口听了两句，这个会也太有意思了吧？我是送外卖的，完全不懂你们这行，但能不能申请加入旁听、凑个热闹？我保证只用「外行视角」给你们加点不一样的料～</p>
+                      <div className="mr-guest-actions">
+                        <button className="mr-btn primary sm" onClick={agreeDoubao}>同意加入</button>
+                        <button className="mr-btn sm" onClick={declineDoubao}>不用了</button>
+                      </div>
+                    </div>
+                  )}
                   {respondingId && (
                     <div className="mr-msg">
-                      <span className="mr-avatar" style={{ background: colorHex(respondingId) }}>{ROSTER[respondingId]?.name?.[0]}</span>
-                      <div className="mr-bubble">
-                        <span className="mr-msg-name">{ROSTER[respondingId]?.name} 正在发言…</span>
-                        <div className="mr-typing"><span /><span /><span /></div>
-                      </div>
+                      <span className="mr-avatar" style={{ background: colorHex(respondingId) }}>{nameOf(respondingId)[0]}</span>
+                        <div className="mr-bubble">
+                          <span className="mr-msg-name">{nameOf(respondingId)} 正在发言…</span>
+                          <div className="mr-typing"><span /><span /><span /></div>
+                        </div>
                     </div>
                   )}
                 </div>

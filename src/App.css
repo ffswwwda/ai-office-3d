@@ -1810,3 +1810,18 @@
 .mr-profile-mem-item p { margin: 0; font-size: 12px; line-height: 1.55; color: #d6d6e4; }
 .mr-profile-clear { margin-top: 4px; border-color: rgba(255,107,157,.35); color: #ff8aa0; }
 .mr-profile-clear:hover { background: rgba(255,107,157,.12); border-color: rgba(255,107,157,.55); color: #ff8aa0; }
+
+/* ── 跨行业访客（外卖员豆包）申请加入卡片 ── */
+.mr-guest-request { margin: 14px 0 4px; background: linear-gradient(135deg, rgba(255,138,61,.10), rgba(255,107,157,.08)); border: 1px solid rgba(255,138,61,.4); border-radius: 14px; padding: 12px 14px; box-shadow: 0 6px 22px rgba(255,138,61,.12); animation: mrGuestPop .35s ease; }
+@keyframes mrGuestPop { from { opacity: 0; transform: translateY(8px) scale(.98) } to { opacity: 1; transform: none } }
+.mr-guest-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.mr-guest-ava { width: 28px; height: 28px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #ff8a3d, #ff6b9d); color: #fff; box-shadow: 0 3px 10px rgba(255,138,61,.35); }
+.mr-guest-name { font-weight: 800; font-size: 13.5px; color: #ffd0a8; }
+.mr-guest-tag { margin-left: auto; font-size: 10.5px; color: #ffb07a; background: rgba(255,138,61,.16); border: 1px solid rgba(255,138,61,.35); border-radius: 999px; padding: 2px 9px; }
+.mr-guest-text { margin: 0 0 10px; font-size: 12.5px; line-height: 1.65; color: #f0e2d6; }
+.mr-guest-actions { display: flex; gap: 8px; }
+.mr-guest-actions .mr-btn.sm { padding: 6px 14px; font-size: 12px; }
+
+/* ── 档案卡：跨行业访客标记 ── */
+.mr-profile-guest-badge { display: inline-block; margin-left: 0; margin-top: 4px; font-size: 10px; color: #ffb07a; background: rgba(255,138,61,.15); border: 1px solid rgba(255,138,61,.4); border-radius: 999px; padding: 2px 8px; }
+.mr-profile-guest-src { margin: 0; font-size: 12px; line-height: 1.6; color: #d6d6e4; background: rgba(255,138,61,.07); border: 1px dashed rgba(255,138,61,.4); border-radius: 9px; padding: 8px 10px; }
