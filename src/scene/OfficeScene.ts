@@ -961,8 +961,9 @@ export class OfficeScene {
     }
 
     // 会议室（点击开会 → 打开会议室弹窗）
+    // 放在办公室右侧中部空白处，避免与底部工具栏 / 工位重叠
     const meeting = new Container()
-    meeting.position.set(480, 576)
+    meeting.position.set(820, 260)
     const mTable = new Graphics()
     mTable.ellipse(0, 0, 62, 30)
     mTable.fill({ color: 0x14162a, alpha: 0.92 })

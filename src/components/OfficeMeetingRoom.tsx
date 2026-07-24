@@ -65,14 +65,17 @@ function downloadMarkdown(filename: string, content: string) {
   } catch { /* ignore */ }
 }
 
-/** 右侧「会议看板」：实时主题 / 目的 / 成员 / 近期观点汇总 */
+/** 右侧「会议看板」：实时主题 / 目的 / 成员 / 近期观点汇总 + 汇总执行方案入口 */
 function MeetingSummaryPanel({
-  topic, purpose, messages, invited,
+  topic, purpose, messages, invited, onMakePlan, planBuilding, canMakePlan,
 }: {
   topic: string
   purpose: string
   messages: ChatMsg[]
   invited: string[]
+  onMakePlan?: () => void
+  planBuilding?: boolean
+  canMakePlan?: boolean
 }) {
   const opinions = messages
     .filter((m) => m.role !== 'user' && m.text)
@@ -107,6 +110,15 @@ function MeetingSummaryPanel({
           ))
         )}
       </div>
+      {onMakePlan && (
+        <button
+          className="mr-btn primary mr-summary-action"
+          disabled={!canMakePlan || planBuilding}
+          onClick={onMakePlan}
+          title={canMakePlan ? '基于主题和讨论内容生成执行方案' : '先开始讨论后再汇总'}>
+          <SvgIcon id="i-doc" size={13} /> {planBuilding ? '汇总中…' : '汇总成执行方案'}
+        </button>
+      )}
     </div>
   )
 }
@@ -696,18 +708,21 @@ function MeetingRoom({
                     disabled={busy}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }} />
-                  <button className="mr-btn primary" disabled={busy || !draft.trim()} onClick={sendMessage}>
-                    {busy ? '生成中…' : '发送'}
-                  </button>
-                </div>
-                <div className="mr-foot">
-                  <button className="mr-btn primary" disabled={busy || planBuilding} onClick={makePlan}>
-                    <SvgIcon id="i-doc" size={13} /> {planBuilding ? '汇总中…' : '汇总成执行方案'}
+                  <button className="mr-btn primary mr-send-btn" disabled={busy || !draft.trim()} onClick={sendMessage}>
+                    <SvgIcon id="i-msg" size={14} /> {busy ? '生成中…' : '发送'}
                   </button>
                 </div>
               </div>
               <div className="mr-col mr-col-right">
-                <MeetingSummaryPanel topic={topic} purpose={purpose} messages={messages} invited={invited} />
+                <MeetingSummaryPanel
+                  topic={topic}
+                  purpose={purpose}
+                  messages={messages}
+                  invited={invited}
+                  onMakePlan={makePlan}
+                  planBuilding={planBuilding}
+                  canMakePlan={messages.length > 0 && !busy}
+                />
               </div>
             </div>
           )}

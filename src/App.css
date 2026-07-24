@@ -1648,6 +1648,23 @@
 .mr-compose { display: flex; gap: 8px; align-items: flex-end; }
 .mr-compose .mr-input { flex: 1; resize: none; }
 .mr-compose .mr-btn { white-space: nowrap; }
+.mr-send-btn {
+  min-width: 78px;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, .35), inset 0 1px 0 rgba(255,255,255,.18);
+  transition: transform .08s ease, box-shadow .15s ease, filter .15s ease;
+}
+.mr-send-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(168, 85, 247, .45), inset 0 1px 0 rgba(255,255,255,.22);
+}
+.mr-send-btn:not(:disabled):active { transform: translateY(0); }
+.mr-send-btn svg { color: #fff; }
 
 /* ═════════ 会议室：全屏 + 左右分栏（左对话 / 右看板） ═════════ */
 .mr-fs-btn { width: auto; height: 30px; padding: 0 11px; gap: 6px; border-radius: 8px; border: 1px solid rgba(0,212,255,.4); background: rgba(0,212,255,.1); color: #00d4ff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
@@ -1685,6 +1702,16 @@
 .mr-sum-task-state { margin-left: auto; font-size: 11px; color: #8b8ba8; }
 .mr-sum-task-state[data-status="done"] { color: #34c759; }
 .mr-sum-task-state[data-status="doing"] { color: #ffb454; }
+.mr-summary-action {
+  margin-top: 8px;
+  align-self: stretch;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 3px 12px rgba(0, 212, 255, .18);
+}
 
 /* 任务详情：下载按钮 */
 .mr-task-detail { padding: 8px 0 4px 38px; display: flex; flex-direction: column; gap: 10px; }
