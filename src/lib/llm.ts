@@ -4,9 +4,15 @@
  */
 import { getLLMConfig } from '@/store/workspaceStore'
 
+export interface LLMContentPart {
+  type: 'text' | 'image_url'
+  text?: string
+  image_url?: { url: string }
+}
+
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant'
-  content: string
+  content: string | LLMContentPart[]
 }
 
 /** 调用一次对话补全。失败抛错，由上层 catch 回退。 */
@@ -48,7 +54,17 @@ export async function callLLM(messages: LLMMessage[], opts?: { temperature?: num
   }
 }
 
-/** 便捷：单轮 system+user。 */
-export async function chatOnce(system: string, user: string, opts?: { temperature?: number }): Promise<string> {
-  return callLLM([{ role: 'system', content: system }, { role: 'user', content: user }], opts)
+/** 便捷：单轮 system+user。opts.images 为图片 data URL 列表，传入后 user 消息变为多模态（视觉模型可见图）。 */
+export async function chatOnce(
+  system: string,
+  user: string,
+  opts?: { temperature?: number; images?: string[] },
+): Promise<string> {
+  const userContent: string | LLMContentPart[] = opts?.images && opts.images.length > 0
+    ? [
+        { type: 'text', text: user },
+        ...opts.images.map((url) => ({ type: 'image_url' as const, image_url: { url } })),
+      ]
+    : user
+  return callLLM([{ role: 'system', content: system }, { role: 'user', content: userContent }], opts)
 }

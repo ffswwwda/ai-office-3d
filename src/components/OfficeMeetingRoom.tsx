@@ -286,13 +286,18 @@ function MeetingRoom({
 
   const handleFileSelect = (files: FileList | null, type: 'image' | 'file') => {
     const file = files?.[0]
-    if (!file) return
+    if (!file || busy) return
     const reader = new FileReader()
     reader.onload = () => {
       const content = reader.result as string
       const att: ChatAttachment = { name: file.name, type, content }
       const label = type === 'image' ? `[图片] ${file.name}` : `[文件] ${file.name}`
-      setMessages((m) => [...m, { role: 'user', text: label, attachments: [att] }])
+      const userMsg: ChatMsg = { role: 'user', text: label, attachments: [att] }
+      const next = [...messages, userMsg]
+      setMessages(next)
+      // 发图/文件后，数字员工也要回应；图片会作为视觉输入传给大模型
+      runResponses(next, type === 'image' ? [content] : [])
+      maybeDoubaoAppear()
     }
     reader.readAsDataURL(file)
   }
@@ -381,39 +386,33 @@ function MeetingRoom({
     setTimeout(() => setNotice(''), 3200)
   }
 
-  /** 用户发言 → 点名则仅该人说，未点名则全员依次发言 */
-  const sendMessage = async () => {
-    const text = draft.trim()
-    if (!text || busy) return
-    const next: ChatMsg[] = [...messages, { role: 'user' as const, text }]
-    setMessages(next)
-    setDraft('')
+  /** 公共：让数字员工对最新一条用户消息依次发言；images 为发起人消息携带的图片 data URL（视觉模型可见） */
+  const runResponses = async (thread: ChatMsg[], images: string[]) => {
+    const lastUser = thread.filter((m) => m.role === 'user').slice(-1)[0]
+    const text = lastUser?.text ?? purpose
     const speakers = resolveSpeakers(text, invited, nameOf)
-    const named = invited.filter((id) => nameOf(id) && text.includes(nameOf(id)))
-    const broadcast = /(大家|所有人|全部|各位|各自|分别|一起|全体|都(来|说|发|表|讲|聊聊|谈谈|说说)|依次|轮到|每人|逐个|挨个|分头|各抒己见|群策群力|都发言|一起说|都来讲|都来聊)/.test(text)
-    const isDefaultAll = named.length === 0 && !broadcast
-    if (isDefaultAll) setNotice('（未点名具体人员，全员依次发言）')
-
     // 检测是否要文件：指定人优先，否则找第一个有数据能力的非访客员工
     const wantsFile = detectFileRequest(text)
     let fileOwner: string | null = null
     let attachment: ChatAttachment | null = null
     if (wantsFile) {
-      fileOwner = named[0] ?? speakers.find((id) => !isGuest(id) && kbOf(id).dataSources.length > 0) ?? null
+      fileOwner = speakers.find((id) => !isGuest(id) && kbOf(id).dataSources.length > 0) ?? null
       if (fileOwner) {
         setRespondingId(fileOwner)
-        attachment = await buildChatAttachment(fileOwner, text, { topic, purpose, thread: next }, nameOf)
+        attachment = await buildChatAttachment(fileOwner, text, { topic, purpose, thread }, nameOf)
       }
     }
-
     setBusy(true)
     for (const id of speakers) {
       setRespondingId(id)
       const reply = await buildReply(
         id,
-        { topic, purpose, thread: next },
+        { topic, purpose, thread },
         nameOf,
-        fileOwner === id && attachment ? { isFileOwner: true, attachment } : undefined,
+        {
+          ...(fileOwner === id && attachment ? { isFileOwner: true, attachment } : {}),
+          images,
+        },
       )
       const msg: ChatMsg = { role: id, text: reply }
       if (fileOwner === id && attachment) msg.attachments = [attachment]
@@ -422,6 +421,20 @@ function MeetingRoom({
     }
     setRespondingId(null)
     setBusy(false)
+  }
+
+  /** 用户发言 → 点名则仅该人说，未点名则全员依次发言 */
+  const sendMessage = async () => {
+    const text = draft.trim()
+    if (!text || busy) return
+    const next: ChatMsg[] = [...messages, { role: 'user' as const, text }]
+    setMessages(next)
+    setDraft('')
+    const named = invited.filter((id) => nameOf(id) && text.includes(nameOf(id)))
+    const broadcast = /(大家|所有人|全部|各位|各自|分别|一起|全体|都(来|说|发|表|讲|聊聊|谈谈|说说)|依次|轮到|每人|逐个|挨个|分头|各抒己见|群策群力|都发言|一起说|都来讲|都来聊)/.test(text)
+    const isDefaultAll = named.length === 0 && !broadcast
+    if (isDefaultAll) setNotice('（未点名具体人员，全员依次发言）')
+    await runResponses(next, [])
     if (isDefaultAll) setNotice('')
     maybeDoubaoAppear()
   }
@@ -577,17 +590,54 @@ function MeetingRoom({
     }
   }
 
-  /** 导出左侧聊天记录为 PNG 图片 */
+  /** 导出整段聊天内容为一张完整 PNG（脱离聊天框，整页渲染，不被滚动截断） */
   const exportChatImage = async () => {
-    const node = chatRef.current
-    if (!node || !htmlToImage) return
+    if (!htmlToImage || messages.length === 0) return
+    setExporting(true)
     try {
-      setExporting(true)
-      const dataUrl = await htmlToImage.toPng(node, {
-        backgroundColor: '#14162a',
-        pixelRatio: 2,
-        cacheBust: true,
-      })
+      const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const wrap = document.createElement('div')
+      wrap.style.cssText = 'position:fixed;left:-99999px;top:0;width:760px;background:#14162a;padding:28px 30px;box-sizing:border-box;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+      const header = document.createElement('div')
+      header.innerHTML =
+        `<div style="color:#fff;font-size:21px;font-weight:800;margin-bottom:6px;">会议记录 · ${esc(topic || '未命名')}</div>` +
+        `<div style="color:#9aa0c0;font-size:12px;margin-bottom:20px;">${esc(meetingDate || '日期未指定')} · 共 ${messages.length} 条对话</div>`
+      wrap.appendChild(header)
+
+      for (const m of messages) {
+        const who = m.role === 'user' ? '发起人' : nameOf(m.role)
+        const color = m.role === 'user' ? '#7c8cff' : colorHex(m.role)
+        const row = document.createElement('div')
+        row.style.cssText = 'margin-bottom:16px;'
+        const nameEl = document.createElement('div')
+        nameEl.style.cssText = `color:${color};font-weight:700;font-size:13px;margin-bottom:5px;`
+        nameEl.textContent = who
+        const bubble = document.createElement('div')
+        bubble.style.cssText = 'background:#1c1f33;color:#e6e6f0;border-radius:10px;padding:10px 13px;font-size:13px;line-height:1.65;white-space:pre-wrap;word-break:break-word;'
+        bubble.textContent = m.text || ''
+        row.appendChild(nameEl)
+        row.appendChild(bubble)
+        if (m.attachments?.length) {
+          for (const att of m.attachments) {
+            if (att.type === 'image') {
+              const img = document.createElement('img')
+              img.src = att.content
+              img.style.cssText = 'display:block;max-width:340px;margin-top:8px;border-radius:8px;'
+              row.appendChild(img)
+            } else {
+              const pill = document.createElement('div')
+              pill.style.cssText = 'display:inline-block;margin-top:8px;background:#2a2e4a;color:#cfd2f0;border-radius:8px;padding:7px 11px;font-size:12px;'
+              pill.textContent = '📎 ' + att.name
+              row.appendChild(pill)
+            }
+          }
+        }
+        wrap.appendChild(row)
+      }
+
+      document.body.appendChild(wrap)
+      const dataUrl = await htmlToImage.toPng(wrap, { backgroundColor: '#14162a', pixelRatio: 2, cacheBust: true })
+      document.body.removeChild(wrap)
       const a = document.createElement('a')
       a.href = dataUrl
       a.download = `会议记录_${(topic || '未命名').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 40)}_${Date.now()}.png`

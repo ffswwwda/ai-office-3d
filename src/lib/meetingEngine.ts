@@ -26,16 +26,22 @@ export interface MeetingContext {
   thread: ChatMsg[]
 }
 
-/** buildReply 的额外选项：当前员工是否要附带可下载文件 */
+/** buildReply 的额外选项：当前员工是否要附带可下载文件 / 发起人最新消息是否带图片 */
 export interface BuildReplyOptions {
   isFileOwner?: boolean
   attachment?: ChatAttachment
+  /** 发起人最新消息携带的图片 data URL，传入后视觉模型可"看见"图片 */
+  images?: string[]
 }
 
 /** 把会话线程压缩成给 LLM 的上下文文本 */
 function threadToText(thread: ChatMsg[], nameOf: (id: string) => string): string {
   const tail = thread.slice(-8)
-  return tail.map((m) => (m.role === 'user' ? '发起人：' + m.text : nameOf(m.role) + '：' + m.text)).join('\n')
+  return tail.map((m) => {
+    const imgMark = m.attachments?.some((a) => a.type === 'image') ? '（附图片）' : ''
+    const fileMark = m.attachments?.some((a) => a.type !== 'image') ? '（附文件）' : ''
+    return (m.role === 'user' ? '发起人：' + m.text : nameOf(m.role) + '：' + m.text) + imgMark + fileMark
+  }).join('\n')
 }
 
 /** 检测用户是否索要文件（表格/文档/CSV/报告等） */
@@ -169,15 +175,19 @@ export async function buildReply(
   const userMsgs = ctx.thread.filter((m) => m.role === 'user')
   const latest = userMsgs[userMsgs.length - 1]?.text ?? ctx.purpose
   const att = opts?.isFileOwner && opts?.attachment ? opts.attachment : null
+  const images = opts?.images && opts.images.length > 0 ? opts.images : null
   const fileNote = att
     ? `\n\n【注意：本次回复会附带一个可下载文件「${att.name}」。你在发言里必须说明这份文件按什么维度筛选/总结、并提醒用户点击文件下载；禁止再说"我没法发文件"或让用户去其他页面手动导出。】`
+    : ''
+  const imageNote = images
+    ? `\n\n【重要：发起人最新消息附带了 ${images.length} 张图片，你已能"看见"这些图片内容。请结合图片里的信息（如图表、截图、数据、设计稿等）给出看法，而不要假装没看到图。】`
     : ''
 
   if (isLLMEnabled()) {
     try {
-      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。用第一人称、口语化、2-4 句，不要寒暄标题，直接说观点。`
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。用第一人称、口语化、2-4 句，不要寒暄标题，直接说观点。`
       const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
-      const out = await chatOnce(sys, user, { temperature: 0.8 })
+      const out = await chatOnce(sys, user, { temperature: 0.8, images: images ?? undefined })
       if (out && out.trim().length > 0) return out.trim()
     } catch { /* 回退规则 */ }
   }
@@ -189,7 +199,17 @@ function ruleReply(id: string, ctx: MeetingContext, latest: string, opts?: Build
   // 跨行业访客（外卖员豆包）：不带任何本站知识库/技能，纯外行创意视角
   if (kb.guest) {
     const topic = ctx.topic || '你们聊的事'
+    if (opts?.images?.length) {
+      return `（我是送咖啡的豆包，凑近看了一眼你发的图）哎呀这图我外行看就是一堆东西，但我从"路人视角"说句大实话——你们自己盯着图看容易钻牛角尖，跳出来想：这图到底想说啥？别被图里的细节带跑。你们继续，我负责撒点不一样的料～`
+    }
     return `（我是送咖啡的豆包，刚在门口旁听了一会儿）外行说句大实话啊——你们聊的「${topic}」，我听下来的感觉是：专业的人容易钻进自己的框里。我送外卖跑遍全城，有个不成熟的类比：这事换个「门外汉」的脑子看，说不定没那么复杂。你们继续，我负责戳窟窿、撒点不一样的料～`
+  }
+
+  // 发起人发了图但当前未接入视觉模型：规则回退也感知到图片，避免"假装没看到"
+  if (opts?.images?.length) {
+    const lead = `我看到你发的这张图了（当前未接入视觉大模型，我是按文字讨论来理解的）。关于「${ctx.topic}」，我的角度是：`
+    const body = `我已接入主站点的${kb.dataSources.length}个数据源，包括${kb.dataSources.slice(0, 3).join('、')}等；主要技能有${kb.skills.slice(0, 3).join('、')}。如果图里是数据/截图/设计稿，建议你点开看细节，我可以结合图里的具体点帮你分析。`
+    return lead + body
   }
 
   // 如果当前员工生成了文件附件，规则回退直接指向文件，不再说"没法发文件"
