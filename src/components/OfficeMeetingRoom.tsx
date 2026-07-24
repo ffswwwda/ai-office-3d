@@ -597,7 +597,9 @@ function MeetingRoom({
     try {
       const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       const wrap = document.createElement('div')
-      wrap.style.cssText = 'position:fixed;left:-99999px;top:0;width:760px;background:#14162a;padding:28px 30px;box-sizing:border-box;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
+      // 不能 left:-99999px —— 屏幕外元素浏览器可能不渲染，导致 html-to-image 捕获空白
+      // 放在视口内，等一帧渲染完再捕获，抓完立刻移除（极快，几乎看不到闪烁）
+      wrap.style.cssText = 'position:fixed;left:0;top:0;width:760px;z-index:2147483647;background:#14162a;padding:28px 30px;box-sizing:border-box;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
       const header = document.createElement('div')
       header.innerHTML =
         `<div style="color:#fff;font-size:21px;font-weight:800;margin-bottom:6px;">会议记录 · ${esc(topic || '未命名')}</div>` +
@@ -636,6 +638,8 @@ function MeetingRoom({
       }
 
       document.body.appendChild(wrap)
+      // 等浏览器完成布局和渲染（至少一帧），否则 html-to-image 可能捕获空白
+      await new Promise<void>(r => requestAnimationFrame(() => r()))
       const dataUrl = await htmlToImage.toPng(wrap, { backgroundColor: '#14162a', pixelRatio: 2, cacheBust: true })
       document.body.removeChild(wrap)
       const a = document.createElement('a')
