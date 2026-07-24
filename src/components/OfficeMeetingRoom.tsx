@@ -670,16 +670,20 @@ function MeetingRoom({
             <SvgIcon id="i-meeting" size={18} />
             <h3>会议室</h3>
             <span className="mr-badge">多智能体圆桌 · 开会到交付</span>
-            <button className="mr-fs-btn" title={fs ? '退出全屏（Esc 也可退出）' : '全屏：充满整个屏幕，左侧对话 / 右侧看板'} onClick={toggleFs}>
-              <SvgIcon id={fs ? 'i-minimize' : 'i-expand'} size={14} />
-              <span>{fs ? '退出全屏' : '全屏'}</span>
-            </button>
-            <button className={'mr-gear' + (llmOn ? ' on' : '')} title="大模型设置（BYOK）" onClick={() => setCfgOpen((v) => !v)}>
-              <SvgIcon id="i-gear" size={14} />
-              <span className="mr-gear-dot" />
-            </button>
+            <div className="mr-head-actions">
+              <button className="mr-fs-btn" title={fs ? '退出全屏（Esc 也可退出）' : '全屏：充满整个屏幕，左侧对话 / 右侧看板'} onClick={toggleFs}>
+                <SvgIcon id={fs ? 'i-minimize' : 'i-expand'} size={14} />
+                <span>{fs ? '退出全屏' : '全屏'}</span>
+              </button>
+              <button className={'mr-gear' + (llmOn ? ' on' : '')} title="大模型设置（BYOK）" onClick={() => setCfgOpen((v) => !v)}>
+                <SvgIcon id="i-gear" size={14} />
+                <span className="mr-gear-dot" />
+              </button>
+            </div>
           </div>
-          <button className="dr-close" onClick={onClose} aria-label="关闭会议室">×</button>
+          <button className="mr-close" onClick={onClose} aria-label="关闭会议室" title="关闭会议室">
+            <SvgIcon id="i-close" size={16} />
+          </button>
         </div>
 
         {/* LLM 设置面板 */}

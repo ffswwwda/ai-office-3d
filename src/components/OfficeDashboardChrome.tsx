@@ -32,10 +32,8 @@ export function OfficeSidebar({ onAgentClick, activeNav, onNavChange }: {
 }) {
   const navItems = [
     { label: '办公室', icon: 'i-office', badge: '7' },
-    { label: '概览', icon: 'i-eye' },
     { label: '项目', icon: 'i-folder' },
     { label: '会议室', icon: 'i-meeting' },
-    { label: '成员', icon: 'i-users' },
   ]
   return (
     <aside className="office-sidebar">
