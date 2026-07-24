@@ -35,6 +35,7 @@ const GUEST_ROSTER: Record<string, { id: string; name: string; color: number }> 
 }
 const nameOf = (id: string) => ROSTER[id]?.name ?? GUEST_ROSTER[id]?.name ?? id
 const colorHex = (id: string) => '#' + (ROSTER[id]?.color ?? GUEST_ROSTER[id]?.color ?? 0x888888).toString(16).padStart(6, '0')
+const colorNum = (id: string) => ROSTER[id]?.color ?? GUEST_ROSTER[id]?.color ?? 0x00d4ff
 
 type Step = 'setup' | 'discuss' | 'plan' | 'done'
 
@@ -63,6 +64,19 @@ function downloadMarkdown(filename: string, content: string) {
     a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 1500)
   } catch { /* ignore */ }
+}
+
+/** 豆包被误派任务时的婉拒话术（外卖员人设，自由发挥） */
+const DOUBAO_REFUSALS = [
+  '哎哎哎，使不得使不得！我就一送外卖的，你让我落地执行，我电动车上的箱子都得笑掉。这活儿我真接不了，你们继续，我帮你们盯着咖啡凉没凉～',
+  '老板你找错人啦。我送外卖在行，送咖啡也行，偶尔插两句外行脑洞也行，但真让我写方案出活儿，我连你们后台按钮都找不着。这任务我拒了，下次点咖啡记得给我五星好评！',
+  '哈哈，我太荣幸了，但我的装备就两样：电动车和手机。你们这专业活儿我干不了，我最大的贡献就是提醒你们——别把问题想太复杂。任务拒收，咖啡管够！',
+  '这事儿我掺和不了。我跑外卖的，见过最多的是人和路，不是数据和方案。你们要落地，找屋里这几位专业的；要我吐槽，我随时在。',
+  '使不得使不得！我也就是路过送杯咖啡，被你们拉着聊了几句。真让我负责任务，我怕把你们项目送错门。我拒了，你们好好干！',
+  '你们要是缺一杯冰美式，我能秒送到；缺一个执行方案，那得另请高明。我本职不是这个，强行上只会帮倒忙，婉拒啦～',
+]
+function randomDoubaoRefusal() {
+  return DOUBAO_REFUSALS[Math.floor(Math.random() * DOUBAO_REFUSALS.length)]
 }
 
 /** 右侧「会议看板」：实时主题 / 目的 / 成员 / 近期观点汇总 + 汇总执行方案入口 */
@@ -430,7 +444,22 @@ function MeetingRoom({
     for (const t of snapshot) {
       updateTask(projectId, t.id, { status: 'doing', startedAt: Date.now() })
       scene?.setAgentState(t.ownerId, 'thinking', t.title)
-      scene?.pushActivity(`${nameOf(t.ownerId)} 开始执行：${t.title}`, ROSTER[t.ownerId]?.color ?? 0x00d4ff)
+      scene?.pushActivity(`${nameOf(t.ownerId)} 开始执行：${t.title}`, colorNum(t.ownerId))
+
+      // 访客（外卖员豆包）可被选中为负责人，但她会按人设婉拒执行
+      if (isGuest(t.ownerId)) {
+        const refusal = randomDoubaoRefusal()
+        for (const stage of t.stages ?? []) {
+          updateStage(projectId, t.id, stage.id, { status: 'done', output: '豆包未执行：' + refusal, doneAt: Date.now() })
+        }
+        const finalOut = `# ${t.title}\n\n> 负责人：${nameOf(t.ownerId)}（${kbOf(t.ownerId).role}）\n> 会议主题：${topic}\n\n【婉拒执行】\n${refusal}\n\n> 说明：豆包为跨行业创意访客/外卖员人设，未接入本站知识库与执行技能，仅能提供外部视角，无法承接实际交付任务。`
+        updateTask(projectId, t.id, { status: 'done', progress: 100, output: finalOut, doneAt: Date.now() })
+        scene?.setAgentState(t.ownerId, 'working', '已婉拒：' + t.title)
+        scene?.pushActivity(`${nameOf(t.ownerId)} 婉拒任务：${t.title}`, colorNum(t.ownerId))
+        await new Promise((r) => setTimeout(r, 250))
+        continue
+      }
+
       const stageOutputs: string[] = []
       for (const stage of t.stages ?? []) {
         updateStage(projectId, t.id, stage.id, { status: 'doing', startedAt: Date.now() })
@@ -459,7 +488,7 @@ function MeetingRoom({
       // 任务完成：把关键结论沉淀进该员工的长期记忆（跨会话 / 跨模型保留）
       addMemory(t.ownerId, summarizeForMemory(kbOf(t.ownerId), topic, t.title, finalOut))
       scene?.setAgentState(t.ownerId, 'working', '已完成：' + t.title)
-      scene?.pushActivity(`${nameOf(t.ownerId)} 交付：${t.title}`, ROSTER[t.ownerId]?.color ?? 0x34c759)
+      scene?.pushActivity(`${nameOf(t.ownerId)} 交付：${t.title}`, colorNum(t.ownerId))
       await new Promise((r) => setTimeout(r, 250))
     }
     setExecuting(false)
@@ -742,6 +771,9 @@ function MeetingRoom({
                       const v = [...planItems]; v[i] = { ...v[i], ownerId: e.target.value }; setPlanItems(v)
                     }}>
                       {AGENT_ROSTER.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                      {invited.includes('doubao') && (
+                        <option value="doubao">豆包（访客 · 外卖员）</option>
+                      )}
                     </select>
                   </div>
                 ))}
