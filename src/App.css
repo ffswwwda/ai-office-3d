@@ -1532,11 +1532,17 @@
 .mr-head .dr-close:hover { background: rgba(255,255,255,.1); }
 .mr-steps { display: flex; gap: 4px; padding: 12px 18px 4px; }
 .mr-step { position: relative; flex: 1; display: flex; align-items: center; gap: 7px;
-  font-size: 12px; color: #6b6b88; padding: 6px 8px; border-radius: 9px; }
+  font-size: 12px; color: #6b6b88; padding: 6px 8px; border-radius: 9px; transition: all .15s; user-select: none; }
+.mr-step.clickable { cursor: pointer; }
+.mr-step.clickable:hover { color: #d8d8e8; background: rgba(255,255,255,.05); }
+.mr-step.disabled { opacity: .55; cursor: not-allowed; }
 .mr-step .mr-step-ic { display: inline-flex; }
 .mr-step.on { color: #fff; background: rgba(0,212,255,.1); }
+.mr-step.on.clickable:hover { background: rgba(0,212,255,.18); }
 .mr-step.past { color: #34c759; }
 .mr-step-line { position: absolute; right: -8px; top: 50%; width: 14px; height: 1px; background: var(--border, #2a2d44); }
+
+.mr-export-img { margin-left: auto; font-size: 11.5px; padding: 4px 10px; }
 .mr-body { padding: 14px 18px 18px; overflow-y: auto; }
 .mr-field { margin-bottom: 12px; }
 .mr-field label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #a8a8c0; margin-bottom: 6px; font-weight: 600; }

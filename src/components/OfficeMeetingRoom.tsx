@@ -8,7 +8,7 @@ import {
   getLLMConfig, setLLMConfig, isLLMEnabled,
 } from '@/store/workspaceStore'
 import {
-  buildReply, buildPlanItems,
+  buildReply, buildPlanItems, buildPlanDoc,
   buildTaskStages, buildStageOutput, buildStageOutputLLM, resolveSpeakers,
   buildTaskOutput,
   type ChatMsg, type MeetingContext,
@@ -16,6 +16,10 @@ import {
 import { kbOf, describeSources, DATA_SOURCE_REGISTRY, isGuest } from '@/lib/employeeKB'
 import { getMemory, clearMemory, addMemory, summarizeForMemory } from '@/lib/employeeMemory'
 import { TaskStageBoard } from '@/components/TaskStageBoard'
+
+// html-to-image 通过 public/html-to-image.js 全局注入
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const htmlToImage: { toPng: (node: HTMLElement, options?: Record<string, any>) => Promise<string> }
 
 function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
   return <svg viewBox="0 0 24 24" width={size} height={size}><use href={'#' + id}/></svg>
@@ -44,46 +48,6 @@ function suggestExperts(topic: string, purpose: string) {
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
-}
-
-function buildPlanDoc(
-  topic: string, purpose: string, items: Array<{ ownerId: string; title: string }>,
-  messages: ChatMsg[] = [],
-): string {
-  const lines: string[] = []
-  lines.push('# 会议规划与执行方案')
-  lines.push(`> 主题：${topic || '（未填写）'}`)
-  lines.push(`> 目的：${purpose || '（未填写）'}`)
-  lines.push(`> 生成时间：${new Date().toLocaleString('zh-CN')}`)
-  lines.push('')
-  lines.push('## 一、会议目标')
-  lines.push(`- 围绕「${topic}」展开，目的为：${purpose}`)
-  lines.push('')
-  lines.push('## 二、执行分工')
-  items.forEach((it, i) => {
-    const r = ROSTER[it.ownerId]
-    lines.push(`${i + 1}. **${r.name}（${EXPERT[it.ownerId].competency}）**：任务——${it.title}`)
-  })
-  lines.push('')
-  // 真实讨论要点：直接来自会议室发言，而不是套模板
-  const realMsgs = messages.filter((m) => m.text && m.text.trim())
-  if (realMsgs.length > 0) {
-    lines.push('## 三、会议讨论要点（来自真实发言）')
-    realMsgs.forEach((m) => {
-      const who = m.role === 'user' ? '发起人' : nameOf(m.role)
-      const txt = m.text.replace(/\n+/g, ' ').trim()
-      lines.push(`- **${who}**：${txt.length > 90 ? txt.slice(0, 90) + '…' : txt}`)
-    })
-    lines.push('')
-    lines.push('## 四、分工说明')
-  } else {
-    lines.push('## 三、分工说明')
-  }
-  items.forEach((it) => {
-    const kb = kbOf(it.ownerId)
-    lines.push(`- ${nameOf(it.ownerId)} 将基于以下数据源产出「${kb.deliverable}」：${describeSources(kb.dataSources).replace(/\n/g, '；')}`)
-  })
-  return lines.join('\n')
 }
 
 /** 把文本作为 .md 文件下载（交付物 / 方案） */
@@ -249,8 +213,11 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
   const [doubaoState, setDoubaoState] = useState<'hidden' | 'requesting' | 'joined' | 'declined'>('hidden')
   const [profileId, setProfileId] = useState<string | null>(null)
   const [profNonce, setProfNonce] = useState(0)
+  const [planBuilding, setPlanBuilding] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const chatRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -324,7 +291,7 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     setTimeout(() => setNotice(''), 3200)
   }
 
-  /** 用户发言 → 按意图只让「被点名 / 全员广播」的人回应，否则仅记录、无人打断 */
+  /** 用户发言 → 点名则仅该人说，未点名则全员依次发言 */
   const sendMessage = async () => {
     const text = draft.trim()
     if (!text || busy) return
@@ -332,12 +299,10 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     setMessages(next)
     setDraft('')
     const speakers = resolveSpeakers(text, invited, nameOf)
-    if (speakers.length === 0) {
-      setNotice('（未点名任何人，已记录你的发言；提及某人姓名让他发言，或说「大家说」让全员发言）')
-      setTimeout(() => setNotice(''), 3200)
-      maybeDoubaoAppear()
-      return
-    }
+    const named = invited.filter((id) => nameOf(id) && text.includes(nameOf(id)))
+    const broadcast = /(大家|所有人|全部|各位|各自|分别|一起|全体|都(来|说|发|表|讲|聊聊|谈谈|说说)|依次|轮到|每人|逐个|挨个|分头|各抒己见|群策群力|都发言|一起说|都来讲|都来聊)/.test(text)
+    const isDefaultAll = named.length === 0 && !broadcast
+    if (isDefaultAll) setNotice('（未点名具体人员，全员依次发言）')
     setBusy(true)
     for (const id of speakers) {
       setRespondingId(id)
@@ -347,14 +312,19 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     }
     setRespondingId(null)
     setBusy(false)
+    if (isDefaultAll) setNotice('')
     maybeDoubaoAppear()
   }
 
-  const makePlan = () => {
+  const makePlan = async () => {
+    if (planBuilding) return
+    setPlanBuilding(true)
     const items = buildPlanItems(invited, ctx())
+    const doc = await buildPlanDoc(topic, purpose, items, messages, nameOf)
     setPlanItems(items)
-    setPlanDoc(buildPlanDoc(topic, purpose, items, messages))
+    setPlanDoc(doc)
     setStep('plan')
+    setPlanBuilding(false)
   }
 
   /** 确认方案 → 生成真实项目并写入工作区存储 */
@@ -450,6 +420,56 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
     window.dispatchEvent(new CustomEvent('office:open-projects'))
   }
 
+  /** 顶部 tab 是否可切换 */
+  const canStepTo = (key: Step) => {
+    if (key === 'setup') return true
+    if (key === 'discuss') return invited.length > 0
+    if (key === 'plan') return messages.length > 0 || planDoc.length > 0
+    if (key === 'done') return !!project
+    return false
+  }
+
+  /** 点击顶部 tab 切换步骤；切到「规划」且尚无方案时自动汇总 */
+  const gotoStep = async (key: Step) => {
+    if (!canStepTo(key)) {
+      if (key === 'done') {
+        setNotice('（需先确认规划并生成项目，才能进入执行）')
+        setTimeout(() => setNotice(''), 2500)
+      }
+      return
+    }
+    if (key === 'plan' && planDoc.length === 0 && messages.length > 0) {
+      await makePlan()
+    } else {
+      setStep(key)
+    }
+  }
+
+  /** 导出左侧聊天记录为 PNG 图片 */
+  const exportChatImage = async () => {
+    const node = chatRef.current
+    if (!node || !htmlToImage) return
+    try {
+      setExporting(true)
+      const dataUrl = await htmlToImage.toPng(node, {
+        backgroundColor: '#14162a',
+        pixelRatio: 2,
+        cacheBust: true,
+      })
+      const a = document.createElement('a')
+      a.href = dataUrl
+      a.download = `会议记录_${(topic || '未命名').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 40)}_${Date.now()}.png`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch {
+      setNotice('（导出图片失败，请重试）')
+      setTimeout(() => setNotice(''), 2500)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const steps: Array<{ key: Step; label: string; icon: string }> = [
     { key: 'setup', label: '设置', icon: 'i-compass' },
     { key: 'discuss', label: '讨论', icon: 'i-msg' },
@@ -483,15 +503,21 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
         {/* LLM 设置面板 */}
         {cfgOpen && <LLMPanel onClose={() => setCfgOpen(false)} />}
 
-        {/* 步骤指示 */}
+        {/* 步骤指示（可点击切换） */}
         <div className="mr-steps">
-          {steps.map((s, i) => (
-            <div key={s.key} className={'mr-step' + (i === stepIdx ? ' on' : '') + (i < stepIdx ? ' past' : '')}>
-              <span className="mr-step-ic"><SvgIcon id={s.icon} size={13} /></span>
-              <span>{s.label}</span>
-              {i < steps.length - 1 && <span className="mr-step-line" />}
-            </div>
-          ))}
+          {steps.map((s, i) => {
+            const clickable = canStepTo(s.key)
+            return (
+              <div key={s.key}
+                className={'mr-step' + (i === stepIdx ? ' on' : '') + (i < stepIdx ? ' past' : '') + (clickable ? ' clickable' : ' disabled')}
+                onClick={() => clickable && gotoStep(s.key)}
+                title={clickable ? `切换到${s.label}` : `暂不可切换到${s.label}`}>
+                <span className="mr-step-ic"><SvgIcon id={s.icon} size={13} /></span>
+                <span>{s.label}</span>
+                {i < steps.length - 1 && <span className="mr-step-line" />}
+              </div>
+            )
+          })}
         </div>
 
         <div className="mr-body">
@@ -552,7 +578,7 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
           {/* ── 步骤二：讨论（多智能体圆桌） ── */}
           {step === 'discuss' && (
             <div className="mr-discuss mr-cols">
-              <div className="mr-col mr-col-left">
+              <div className="mr-col mr-col-left" ref={chatRef}>
                 <div className="mr-chips">
                   {invited.map((id) => (
                     <span key={id} className="mr-chip clickable" style={{ borderColor: colorHex(id) }} title="点击查看员工完整档案" onClick={() => { setProfileId(id); setProfNonce((n) => n + 1) }}>
@@ -560,6 +586,9 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
                       {nameOf(id)}
                     </span>
                   ))}
+                  <button className="mr-btn sm mr-export-img" disabled={exporting || messages.length === 0} onClick={exportChatImage} title="导出聊天记录为图片">
+                    <SvgIcon id="i-camera" size={12} /> {exporting ? '生成中…' : '导出图片'}
+                  </button>
                 </div>
                 {notice && <div className="mr-notice">{notice}</div>}
                 <div className="mr-thread" ref={scrollRef}>
@@ -619,8 +648,8 @@ function MeetingRoom({ onClose }: { onClose: () => void }) {
                   </button>
                 </div>
                 <div className="mr-foot">
-                  <button className="mr-btn primary" disabled={busy} onClick={makePlan}>
-                    <SvgIcon id="i-doc" size={13} /> 汇总成执行方案
+                  <button className="mr-btn primary" disabled={busy || planBuilding} onClick={makePlan}>
+                    <SvgIcon id="i-doc" size={13} /> {planBuilding ? '汇总中…' : '汇总成执行方案'}
                   </button>
                 </div>
               </div>

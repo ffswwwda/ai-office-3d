@@ -238,11 +238,11 @@ export function buildStageOutput(
   return lines.join('\n')
 }
 
-/* ───────── 0. 发言意图解析（点名 > 广播 > 无人） ───────── */
+/* ───────── 0. 发言意图解析（点名 > 广播 > 全员） ───────── */
 /** 用户发一句话，决定「谁该发言」：
  *  - 提到某员工姓名 → 仅该人发言（点名优先）
  *  - 出现广播词（大家/都来说/各自/分别…）→ 全员发言
- *  - 都不是 → 无人发言（用户只是陈述，不打断）
+ *  - 什么都没点 → 默认全员发言（未点名时大家轮流说）
  */
 export function resolveSpeakers(text: string, invited: string[], nameOf: (id: string) => string): string[] {
   const t = text || ''
@@ -253,7 +253,74 @@ export function resolveSpeakers(text: string, invited: string[], nameOf: (id: st
   if (named.length > 0) return named
   const broadcast = /(大家|所有人|全部|各位|各自|分别|一起|全体|都(来|说|发|表|讲|聊聊|谈谈|说说)|依次|轮到|每人|逐个|挨个|分头|各抒己见|群策群力|都发言|一起说|都来讲|都来聊)/.test(t)
   if (broadcast) return invited.slice()
-  return []
+  // 未点名且未广播 → 默认全员依次发言
+  return invited.slice()
+}
+
+/** 根据主题、目的、真实讨论与分工，生成执行方案文档；接入 LLM 时做真正总结，否则回退到精简模板 */
+export async function buildPlanDoc(
+  topic: string, purpose: string, items: Array<{ ownerId: string; title: string }>,
+  messages: ChatMsg[], nameOf: (id: string) => string,
+): Promise<string> {
+  if (isLLMEnabled()) {
+    try {
+      const sys = `你是一名资深会议 facilitator。请根据会议主题、目的、真实讨论记录与拟定分工，提炼成一份清晰、可执行的会议纪要 / 执行方案。
+
+要求：
+1. 不要简单罗列聊天记录，要基于讨论内容做归纳、收敛、提炼。
+2. 结构必须包含：会议目标、关键结论、执行分工、下一步行动、主要风险/待确认项。
+3. 用 Markdown，中文，条理清晰；分工部分用表格呈现（负责人 / 任务 / 预期产出）。
+4. 结论必须能从讨论记录中找到依据，禁止编造未出现的内容。`
+      const thread = messages
+        .filter((m) => m.text && m.text.trim())
+        .slice(-20)
+        .map((m) => `${m.role === 'user' ? '发起人' : nameOf(m.role)}：${m.text.replace(/\n+/g, ' ').trim()}`)
+        .join('\n')
+      const itemsText = items.map((it, i) => `${i + 1}. ${nameOf(it.ownerId)}（${it.title}）`).join('\n')
+      const user = `主题：${topic || '（未填写）'}\n目的：${purpose || '（未填写）'}\n\n讨论记录：\n${thread || '（暂无讨论）'}\n\n拟定执行分工：\n${itemsText || '（暂无分工）'}\n\n请直接生成 Markdown 执行方案：` 
+      const out = await chatOnce(sys, user, { temperature: 0.5 })
+      if (out && out.trim().length > 0) return out.trim()
+    } catch { /* LLM 失败时回退规则版 */ }
+  }
+
+  // 规则兜底：精简，不照搬全部发言
+  const lines: string[] = []
+  lines.push('# 会议规划与执行方案')
+  lines.push(`> 主题：${topic || '（未填写）'}`)
+  lines.push(`> 目的：${purpose || '（未填写）'}`)
+  lines.push(`> 生成时间：${new Date().toLocaleString('zh-CN')}`)
+  lines.push('')
+  lines.push('## 一、会议目标')
+  lines.push(`- 围绕「${topic || '本次会议主题'}」展开，目的为：${purpose || '（未填写）'}`)
+  lines.push('')
+  lines.push('## 二、执行分工')
+  items.forEach((it, i) => {
+    const kb = kbOf(it.ownerId)
+    lines.push(`${i + 1}. **${nameOf(it.ownerId)}（${kb.role}）**：${it.title}`)
+  })
+  lines.push('')
+  const realMsgs = messages.filter((m) => m.text && m.text.trim())
+  if (realMsgs.length > 0) {
+    lines.push('## 三、讨论要点（来自真实发言，仅保留最近几条）')
+    realMsgs.slice(-6).forEach((m) => {
+      const who = m.role === 'user' ? '发起人' : nameOf(m.role)
+      const txt = m.text.replace(/\n+/g, ' ').trim()
+      lines.push(`- **${who}**：${txt.length > 90 ? txt.slice(0, 90) + '…' : txt}`)
+    })
+    lines.push('')
+    lines.push('## 四、分工说明')
+  } else {
+    lines.push('## 三、分工说明')
+  }
+  items.forEach((it) => {
+    const kb = kbOf(it.ownerId)
+    lines.push(`- ${nameOf(it.ownerId)} 将基于${kb.dataSources.length}个数据源产出「${kb.deliverable}」。`)
+  })
+  if (!isLLMEnabled()) {
+    lines.push('')
+    lines.push('> 当前为规则引擎生成的精简方案。在会议室设置中填入 API Key 后，此处会自动替换为大模型基于真实讨论内容生成的总结方案。')
+  }
+  return lines.join('\n')
 }
 
 /* ───────── 5. 阶段产出的 LLM 版本（真实干活） ───────── */
