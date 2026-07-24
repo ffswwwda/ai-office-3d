@@ -37,6 +37,7 @@ const GUEST_ROSTER: Record<string, { id: string; name: string; color: number }> 
 const nameOf = (id: string) => ROSTER[id]?.name ?? GUEST_ROSTER[id]?.name ?? id
 const colorHex = (id: string) => '#' + (ROSTER[id]?.color ?? GUEST_ROSTER[id]?.color ?? 0x888888).toString(16).padStart(6, '0')
 const colorNum = (id: string) => ROSTER[id]?.color ?? GUEST_ROSTER[id]?.color ?? 0x00d4ff
+const splitParas = (text: string): string[] => text.split(/\n\n+/).filter(Boolean)
 
 /** 一键测试 API 配置（由用户提供，仅用于演示一键填入） */
 const TEST_API_MODEL = 'deepseek-v4-flash'
@@ -150,7 +151,7 @@ function EmployeeProfileCard({ id, nonce, onClose }: { id: string; nonce: number
   const kb = kbOf(id)
   const mem = getMemory(id)
   return (
-    <div className="mr-profile-overlay" onClick={onClose}>
+    <div className="mr-profile-overlay" onClick={(e) => { e.stopPropagation(); onClose() }}>
       <div className="mr-profile" onClick={(e) => e.stopPropagation()} key={nonce}>
         <div className="mr-profile-head">
           <span className="mr-profile-avatar" style={{ background: colorHex(id) }}>{kb.name[0]}</span>
@@ -855,7 +856,7 @@ function MeetingRoom({
                       return (
                         <div key={i} className="mr-msg user">
                           <div className="mr-bubble user">
-                            <p>{m.text}</p>
+                            {splitParas(m.text).map((para, idx) => <p key={idx}>{para}</p>)}
                             {m.attachments && m.attachments.length > 0 && renderAttachments(m.attachments)}
                           </div>
                           <span className="mr-msg-name">发起人</span>
@@ -869,7 +870,7 @@ function MeetingRoom({
                         <span className="mr-avatar" style={{ background: colorHex(m.role) }}>{who[0]}</span>
                         <div className="mr-bubble">
                           <span className="mr-msg-name">{who}</span>
-                          <p>{m.text}</p>
+                          {splitParas(m.text).map((para, idx) => <p key={idx}>{para}</p>)}
                           {m.attachments && m.attachments.length > 0 && renderAttachments(m.attachments)}
                         </div>
                       </div>

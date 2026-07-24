@@ -1640,6 +1640,7 @@
 .mr-bubble { background: rgba(34,38,64,.92); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 9px 12px; max-width: 84%; color: #f2f3fb; }
 .mr-bubble.user { background: linear-gradient(135deg,#00d4ff,#a855f7 70%,#ff6b9d); border: none; color: #fff; }
 .mr-bubble p { margin: 0; font-size: 13.5px; line-height: 1.6; font-weight: 500; white-space: pre-wrap; color: #f2f3fb; }
+.mr-bubble p + p { margin-top: 8px; }
 .mr-msg-name { display: block; font-size: 11px; color: #c2c6e2; margin-bottom: 4px; font-weight: 600; }
 .mr-msg.user .mr-bubble.user .mr-msg-name { color: rgba(255,255,255,.85); }
 .mr-typing { display: flex; gap: 4px; margin-top: 8px; }

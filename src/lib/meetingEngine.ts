@@ -185,7 +185,13 @@ export async function buildReply(
 
   if (isLLMEnabled()) {
     try {
-      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。用第一人称、口语化、2-4 句，不要寒暄标题，直接说观点。`
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。
+
+【输出格式规则】
+1. 用第一人称、口语化，不要寒暄标题，直接说观点。
+2. 如果内容超过 2 句话，或包含多个并列要点，请分成多段，段与段之间空一行。
+3. 遇到步骤、维度、风险、建议、优劣势等并列信息时，优先使用 "1. / 2. / 3." 或 "- " 列表输出，而不是挤成一段。
+4. 每条要点控制在 1-2 行内，整体保持 2-5 个要点/段落，避免大段连续文字。`
       const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
       const out = await chatOnce(sys, user, { temperature: 0.8, images: images ?? undefined })
       if (out && out.trim().length > 0) return out.trim()
@@ -225,7 +231,7 @@ function ruleReply(id: string, ctx: MeetingContext, latest: string, opts?: Build
   const lead = riskWord ? `我比较谨慎——「${ctx.topic}」里我看到的隐患是：` : `关于「${ctx.topic}」，我的角度是这样的：`
   const body = `我已接入主站点的${kb.dataSources.length}个数据源，包括${kb.dataSources.slice(0, 3).join('、')}等；主要技能有${kb.skills.slice(0, 3).join('、')}。建议你先落到「${kb.deliverable}」上，证据足了再扩大。`
   const tail = hit ? '这一块我有现成的方法，可以直接接。' : '不过这块如果缺数据，结论要先打问号。'
-  return lead + body + tail
+  return `${lead}\n\n${body}\n\n${tail}`
 }
 
 /* ───────── 2. 规划：每位员工提议自己要认领的任务 ───────── */
