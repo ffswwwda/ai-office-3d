@@ -280,11 +280,13 @@ function MeetingRoom({
     setStep('discuss')
   }
 
-  /** 会议进行中随机触发「外卖员豆包」送咖啡并申请加入（每会议最多出现一次） */
+  /** 会议进行中随机触发「外卖员豆包」送咖啡并申请加入（每会议最多出现一次）
+   *  概率提到 0.85：既保留"随机闯入"的趣味，又基本保证每次会议用户都能遇见她。
+   */
   const maybeDoubaoAppear = () => {
     if (doubaoState !== 'hidden') return
     if (invited.length === 0) return
-    if (Math.random() < 0.55) setDoubaoState('requesting')
+    if (Math.random() < 0.85) setDoubaoState('requesting')
   }
 
   /** 同意豆包加入：她入列参会、读取全部聊天上下文，以跨行业创意视角参与 */
@@ -332,7 +334,12 @@ function MeetingRoom({
     setBusy(true)
     for (const id of speakers) {
       setRespondingId(id)
-      const reply = await buildReply(id, { topic, purpose, thread: next }, nameOf)
+      const reply = await buildReply(
+        id,
+        { topic, purpose, thread: next },
+        nameOf,
+        fileOwner === id && attachment ? { isFileOwner: true, attachment } : undefined,
+      )
       const msg: ChatMsg = { role: id, text: reply }
       if (fileOwner === id && attachment) msg.attachments = [attachment]
       setMessages((m) => [...m, msg])

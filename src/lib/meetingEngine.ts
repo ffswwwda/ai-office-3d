@@ -25,6 +25,12 @@ export interface MeetingContext {
   thread: ChatMsg[]
 }
 
+/** buildReply 的额外选项：当前员工是否要附带可下载文件 */
+export interface BuildReplyOptions {
+  isFileOwner?: boolean
+  attachment?: ChatAttachment
+}
+
 /** 把会话线程压缩成给 LLM 的上下文文本 */
 function threadToText(thread: ChatMsg[], nameOf: (id: string) => string): string {
   const tail = thread.slice(-8)
@@ -143,29 +149,46 @@ function sourceContext(id: string): string {
 }
 
 /* ───────── 1. 多智能体发言（圆桌讨论） ───────── */
-export async function buildReply(id: string, ctx: MeetingContext, nameOf: (id: string) => string): Promise<string> {
+export async function buildReply(
+  id: string,
+  ctx: MeetingContext,
+  nameOf: (id: string) => string,
+  opts?: BuildReplyOptions,
+): Promise<string> {
   const kb = kbOf(id)
   const userMsgs = ctx.thread.filter((m) => m.role === 'user')
   const latest = userMsgs[userMsgs.length - 1]?.text ?? ctx.purpose
+  const att = opts?.isFileOwner && opts?.attachment ? opts.attachment : null
+  const fileNote = att
+    ? `\n\n【注意：本次回复会附带一个可下载文件「${att.name}」。你在发言里必须说明这份文件按什么维度筛选/总结、并提醒用户点击文件下载；禁止再说"我没法发文件"或让用户去其他页面手动导出。】`
+    : ''
 
   if (isLLMEnabled()) {
     try {
-      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。用第一人称、口语化、2-4 句，不要寒暄标题，直接说观点。`
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。用第一人称、口语化、2-4 句，不要寒暄标题，直接说观点。`
       const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
       const out = await chatOnce(sys, user, { temperature: 0.8 })
       if (out && out.trim().length > 0) return out.trim()
     } catch { /* 回退规则 */ }
   }
-  return ruleReply(id, ctx, latest)
+  return ruleReply(id, ctx, latest, opts)
 }
 
-function ruleReply(id: string, ctx: MeetingContext, latest: string): string {
+function ruleReply(id: string, ctx: MeetingContext, latest: string, opts?: BuildReplyOptions): string {
   const kb = kbOf(id)
   // 跨行业访客（外卖员豆包）：不带任何本站知识库/技能，纯外行创意视角
   if (kb.guest) {
     const topic = ctx.topic || '你们聊的事'
     return `（我是送咖啡的豆包，刚在门口旁听了一会儿）外行说句大实话啊——你们聊的「${topic}」，我听下来的感觉是：专业的人容易钻进自己的框里。我送外卖跑遍全城，有个不成熟的类比：这事换个「门外汉」的脑子看，说不定没那么复杂。你们继续，我负责戳窟窿、撒点不一样的料～`
   }
+
+  // 如果当前员工生成了文件附件，规则回退直接指向文件，不再说"没法发文件"
+  if (opts?.isFileOwner && opts?.attachment) {
+    const att = opts.attachment
+    const rows = att.type === 'csv' ? Math.max(0, att.content.split('\n').length - 1) + '' : '若干'
+    return `已按你的要求生成「${att.name}」（${att.type === 'csv' ? 'CSV 表格' : att.type === 'markdown' ? 'Markdown 文档' : '文本'}），点击下方文件即可下载。内容基于本次会议讨论整理，共 ${rows} 条要点。`
+  }
+
   const text = (latest + ' ' + ctx.topic + ' ' + ctx.purpose).toLowerCase()
   const hit = kb.dataSources.some((sid) => text.includes(sid.toLowerCase()) || (sid.length >= 2 && text.includes(sid.toLowerCase().slice(0, 2))))
   const riskWord = /风险|不确定|担心|可能|存疑|隐患|翻车/.test(ctx.purpose + latest)
