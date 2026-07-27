@@ -4,6 +4,7 @@ import { AGENT_ROSTER } from '@/scene/layout/officeLayout'
 import { kbOf, composeSystemPrompt, DATA_SOURCE_REGISTRY } from '@/lib/employeeKB'
 import { memoryStore } from '@/lib/employeeMemory'
 import { streamChat } from '@/lib/llm'
+import { normalizePunct } from '@/lib/meetingEngine'
 import { tagComment, VOC_DIMENSION_NAMES, type VocTagResult } from '@/lib/vocTagger'
 
 function SvgIcon({ id, size = 14 }: { id: string; size?: number }) {
@@ -39,6 +40,12 @@ const SENTIMENT_COLOR: Record<string, string> = {
 type ChatLine = { role: 'user' | 'emp'; text: string; images?: string[]; file?: UserFile; job?: TagJob }
 type VocRow = { id: string; text: string; result: VocTagResult }
 type UserFile = { name: string; type: string; size: number; dataUrl?: string; content?: string }
+type TagConfig = {
+  limit?: number
+  dimensions?: string[]
+  sentimentFilter?: string[]
+  instruction?: string
+}
 type TagJob = {
   id: string
   fileName: string
@@ -48,6 +55,7 @@ type TagJob = {
   rows: VocRow[]
   done: boolean
   cancelled: boolean
+  config: TagConfig
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -101,6 +109,47 @@ const isTableFile = (f: File) =>
 
 const isTableFileByName = (name: string) => /\.(csv|tsv|txt)$/i.test(name)
 
+/** 从用户文字指令里提取批量打标配置（条数 / 维度 / 情感过滤） */
+function parseTagInstruction(text: string): TagConfig {
+  const cfg: TagConfig = { instruction: text.trim() || undefined }
+  if (!text) return cfg
+
+  // 数量：「前50条」「只打100条」「最多200条」「打前 30 条」
+  const limitMatch = text.match(/(?:前|只打|最多|打前|处理前|限制|限量)\s*(\d+)\s*条/)
+  if (limitMatch) cfg.limit = parseInt(limitMatch[1], 10)
+
+  // 维度：「只打情感和场景」「关注用户画像和动机」
+  const dimMap: Record<string, string> = {
+    '用户画像': '用户画像', '画像': '用户画像',
+    '动机': '购买动机', '购买动机': '购买动机',
+    '场景': '使用场景', '使用场景': '使用场景',
+    '阻碍': '使用阻碍', '使用阻碍': '使用阻碍',
+    '克服': '克服方式', '克服方式': '克服方式',
+    '忠诚': '用户忠诚度', '忠诚度': '用户忠诚度',
+    '改进': '产品改进建议', '改进建议': '产品改进建议',
+    '需求': '十三种需求', '13维': '十三种需求', '13种': '十三种需求',
+    '使用方式': '使用方式',
+    '购买目的': '购买目的',
+    '产品属性': '产品属性',
+  }
+  const matchedDims = Object.keys(dimMap).filter((k) => text.includes(k))
+  if (matchedDims.length > 0) {
+    cfg.dimensions = [...new Set(matchedDims.map((k) => dimMap[k]))]
+  }
+
+  // 情感过滤：「只看负面」「只保留正面和中性」
+  const sentimentMap: Record<string, string> = { '正面': '正面', '负面': '负面', '中性': '中性' }
+  if (/只看负面/.test(text)) cfg.sentimentFilter = ['负面']
+  else if (/只看正面/.test(text)) cfg.sentimentFilter = ['正面']
+  else if (/只看中性/.test(text)) cfg.sentimentFilter = ['中性']
+  else {
+    const matchedSenti = Object.keys(sentimentMap).filter((k) => text.includes(k))
+    if (matchedSenti.length > 0) cfg.sentimentFilter = matchedSenti
+  }
+
+  return cfg
+}
+
 export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const kb = useMemo(() => kbOf(agentId), [agentId])
   const accent = colorHex(agentId)
@@ -132,9 +181,9 @@ export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClo
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  function registerJob(fileName: string, total: number): string {
+  function registerJob(fileName: string, total: number, config: TagConfig = {}): string {
     const id = rid()
-    const job: TagJob = { id, fileName, total, current: 0, currentDim: -1, rows: [], done: false, cancelled: false }
+    const job: TagJob = { id, fileName, total, current: 0, currentDim: -1, rows: [], done: false, cancelled: false, config }
     setJobs((prev) => ({ ...prev, [id]: job }))
     setActiveJobId(id)
     setJobBoardOpen(true)
@@ -271,6 +320,7 @@ export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClo
                   stopBatchTag={stopBatchTag}
                   setActiveJobId={setActiveJobId}
                   setJobBoardOpen={setJobBoardOpen}
+                  setJobBoardFullscreen={setJobBoardFullscreen}
                 />}
           </section>
 
@@ -459,16 +509,18 @@ function PrivateChat({
   stopBatchTag,
   setActiveJobId,
   setJobBoardOpen,
+  setJobBoardFullscreen,
 }: {
   agentId: string
   memRef: React.MutableRefObject<string>
   onStartBatch: (fileName: string, rows: string[]) => Promise<string>
-  onRegisterJob: (fileName: string, total: number) => string
+  onRegisterJob: (fileName: string, total: number, config?: TagConfig) => string
   jobs: Record<string, TagJob>
   setJobs: React.Dispatch<React.SetStateAction<Record<string, TagJob>>>
   stopBatchTag: (jobId: string) => void
   setActiveJobId: (id: string | null) => void
   setJobBoardOpen: (open: boolean) => void
+  setJobBoardFullscreen: (fs: boolean) => void
 }) {
   const kb = useMemo(() => kbOf(agentId), [agentId])
   const [msgs, setMsgs] = useState<ChatLine[]>([])
@@ -518,26 +570,31 @@ function PrivateChat({
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  async function runLocalBatchTag(fileName: string, rows: string[]) {
-    const jobId = onRegisterJob(fileName, rows.length)
+  async function runLocalBatchTag(fileName: string, rows: string[], config: TagConfig = {}) {
+    const targetRows = config.limit && config.limit > 0 ? rows.slice(0, config.limit) : rows
+    const jobId = onRegisterJob(fileName, targetRows.length, config)
     activeBatchRef.current = jobId
-    setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：收到 ${fileName}，共 ${rows.length} 条，我现在逐维扫描打标…`, job: { id: jobId, fileName, total: rows.length, current: 0, currentDim: -1, rows: [], done: false, cancelled: false } }])
+    setMsgs((m) => [...m, {
+      role: 'emp',
+      text: `${kb.name}：收到 ${fileName}，共 ${targetRows.length} 条${config.limit ? `（按你的要求只取前 ${config.limit} 条）` : ''}，我现在按你的指令逐维扫描打标…`,
+      job: { id: jobId, fileName, total: targetRows.length, current: 0, currentDim: -1, rows: [], done: false, cancelled: false, config }
+    }])
 
-    const isBig = rows.length > 200
-    const dimDelay = isBig ? 12 : rows.length > 50 ? 35 : 90
+    const isBig = targetRows.length > 200
+    const dimDelay = isBig ? 12 : targetRows.length > 50 ? 35 : 90
     const batchSize = isBig ? 10 : 1
 
-    for (let idx = 0; idx < rows.length; idx++) {
+    for (let idx = 0; idx < targetRows.length; idx++) {
       const job = jobs[jobId]
       if (job?.cancelled || activeBatchRef.current !== jobId) {
         setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], cancelled: true, done: true, currentDim: -1 } }))
         return
       }
-      const text = rows[idx]
+      const text = targetRows[idx]
       setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: idx, currentDim: 0 } }))
       const result = tagComment(text)
 
-      if (idx % batchSize === 0 || idx === rows.length - 1) {
+      if (idx % batchSize === 0 || idx === targetRows.length - 1) {
         for (let d = 0; d < VOC_DIMENSION_NAMES.length; d++) {
           setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], currentDim: d } }))
           await sleep(dimDelay)
@@ -552,7 +609,7 @@ function PrivateChat({
       await sleep(isBig ? 10 : 30)
     }
 
-    setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: rows.length, currentDim: -1, done: true } }))
+    setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: targetRows.length, currentDim: -1, done: true } }))
     activeBatchRef.current = null
   }
 
@@ -563,7 +620,7 @@ function PrivateChat({
     clearAttach()
     setInput('')
 
-    const userMsg: ChatLine = { role: 'user', text: text || (currentAttach ? `📎 ${currentAttach.name}` : '') }
+    const userMsg: ChatLine = { role: 'user', text: text || (currentAttach ? currentAttach.name : '') }
     if (currentAttach) userMsg.file = currentAttach
     setMsgs((m) => [...m, userMsg])
 
@@ -576,7 +633,7 @@ function PrivateChat({
         if (rows.length === 0) {
           setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：我没从文件里读到有效评论行。请检查文件是不是 CSV / TSV / TXT，且每行是一条评论；如果是表格，第一行最好有「评论」或「content」列名。` }])
         } else {
-          await runLocalBatchTag(currentAttach.name, rows)
+          await runLocalBatchTag(currentAttach.name, rows, parseTagInstruction(text))
         }
       } finally {
         setBusy(false)
@@ -602,12 +659,12 @@ function PrivateChat({
         (d) => setTyping((t) => t + d),
         { images, signal: abortCtrlRef.current.signal },
       )
-      setMsgs((m) => [...m, { role: 'emp', text: full }])
+      setMsgs((m) => [...m, { role: 'emp', text: normalizePunct(full) }])
     } catch (err) {
       if ((err as Error)?.name === 'AbortError' || (err as Error)?.message?.includes('aborted')) {
-        setMsgs((m) => [...m, { role: 'emp', text: typing || '（已停止输出）' }])
+        setMsgs((m) => [...m, { role: 'emp', text: normalizePunct(typing || '（已停止输出）') }])
       } else {
-        setMsgs((m) => [...m, { role: 'emp', text: fallbackReply(text || '图片分析') }])
+        setMsgs((m) => [...m, { role: 'emp', text: normalizePunct(fallbackReply(text || '图片分析')) }])
       }
     } finally {
       setTyping('')
@@ -645,16 +702,21 @@ function PrivateChat({
         )}
         {msgs.map((m, i) => (
           <div key={i}>
-            <div className={'wb-bubble ' + (m.role === 'user' ? 'me' : 'emp')}>
-              <div className="wb-bubble-name">{m.role === 'user' ? '我' : kb.name}</div>
-              <div className="wb-bubble-text">
-                {m.file && m.file.dataUrl ? (
-                  <img src={m.file.dataUrl} alt={m.file.name} className="wb-chat-img" />
-                ) : null}
-                {m.file && !m.file.dataUrl ? (
-                  <span className="wb-chat-file"><SvgIcon id="i-doc" size={13} /> {m.file.name}</span>
-                ) : null}
-                {m.text ? m.text : null}
+            <div className={'wb-msg-row ' + (m.role === 'user' ? 'me' : 'emp')}>
+              <div className="wb-avatar" title={m.role === 'user' ? '我' : kb.name}>
+                {m.role === 'user' ? '我' : kb.name.slice(0, 1)}
+              </div>
+              <div className="wb-bubble">
+                <div className="wb-bubble-name">{m.role === 'user' ? '我' : kb.name}</div>
+                <div className="wb-bubble-text">
+                  {m.file && m.file.dataUrl ? (
+                    <img src={m.file.dataUrl} alt={m.file.name} className="wb-chat-img" />
+                  ) : null}
+                  {m.file && !m.file.dataUrl ? (
+                    <span className="wb-chat-file"><SvgIcon id="i-doc" size={13} /> {m.file.name}</span>
+                  ) : null}
+                  {m.text ? m.text : null}
+                </div>
               </div>
             </div>
             {m.job && (
@@ -662,14 +724,18 @@ function PrivateChat({
                 jobId={m.job.id}
                 jobs={jobs}
                 onOpenBoard={() => { setActiveJobId(m.job!.id); setJobBoardOpen(true) }}
+                onOpenFullscreen={() => { setActiveJobId(m.job!.id); setJobBoardOpen(true); setJobBoardFullscreen(true) }}
               />
             )}
           </div>
         ))}
         {typing && (
-          <div className="wb-bubble emp">
-            <div className="wb-bubble-name">{kb.name}</div>
-            <div className="wb-bubble-text">{typing}<span className="wb-cursor" /></div>
+          <div className="wb-msg-row emp">
+            <div className="wb-avatar" title={kb.name}>{kb.name.slice(0, 1)}</div>
+            <div className="wb-bubble">
+              <div className="wb-bubble-name">{kb.name}</div>
+              <div className="wb-bubble-text">{typing}<span className="wb-cursor" /></div>
+            </div>
           </div>
         )}
       </div>
@@ -722,11 +788,15 @@ function PrivateChat({
 }
 
 /* ----------------------------- 批量打标任务可视化（聊天流里的小卡片） ----------------------------- */
-function BatchTagJob({ jobId, jobs, onOpenBoard }: { jobId: string; jobs: Record<string, TagJob>; onOpenBoard: () => void }) {
+function BatchTagJob({ jobId, jobs, onOpenBoard, onOpenFullscreen }: { jobId: string; jobs: Record<string, TagJob>; onOpenBoard: () => void; onOpenFullscreen: () => void }) {
   const job = jobs[jobId]
   if (!job) return null
   const senti = { 正面: 0, 中性: 0, 负面: 0 } as Record<string, number>
-  job.rows.forEach((r) => { senti[r.result.sentiment] = (senti[r.result.sentiment] ?? 0) + 1 })
+  const visibleRows = job.config.sentimentFilter
+    ? job.rows.filter((r) => job.config.sentimentFilter!.includes(r.result.sentiment))
+    : job.rows
+  visibleRows.forEach((r) => { senti[r.result.sentiment] = (senti[r.result.sentiment] ?? 0) + 1 })
+  const visibleDims = job.config.dimensions ?? null
 
   return (
     <div className="wb-job">
@@ -736,6 +806,14 @@ function BatchTagJob({ jobId, jobs, onOpenBoard }: { jobId: string; jobs: Record
           {job.cancelled ? `已停止 ${job.rows.length} / ${job.total} 条` : job.done ? `已完成 ${job.total} 条` : `处理中 ${job.current + (job.currentDim >= 0 ? 1 : 0)} / ${job.total} 条`}
         </div>
       </div>
+
+      {(job.config.instruction || visibleDims || job.config.sentimentFilter) && (
+        <div className="wb-job-config">
+          {job.config.instruction ? <span className="wb-job-cfg-item" title={job.config.instruction}>指令：{job.config.instruction}</span> : null}
+          {visibleDims ? <span className="wb-job-cfg-item">只看维度：{visibleDims.join('、')}</span> : null}
+          {job.config.sentimentFilter ? <span className="wb-job-cfg-item">只看情感：{job.config.sentimentFilter.join('、')}</span> : null}
+        </div>
+      )}
 
       {!job.done && !job.cancelled && (
         <div className="wb-job-scan">
@@ -765,33 +843,39 @@ function BatchTagJob({ jobId, jobs, onOpenBoard }: { jobId: string; jobs: Record
             </tr>
           </thead>
           <tbody>
-            {job.rows.length === 0 && (
+            {visibleRows.length === 0 && (
               <tr><td colSpan={3} className="wb-table-empty">等待小灵开始扫描…</td></tr>
             )}
-            {job.rows.map((r) => (
-              <tr key={r.id}>
-                <td className="wb-td-text" title={r.text}>{r.text.length > 40 ? r.text.slice(0, 40) + '…' : r.text}</td>
-                <td>
-                  <div className="wb-td-tags">
-                    {r.result.dims.length === 0
-                      ? <span className="wb-td-none">未命中维度</span>
-                      : r.result.dims.map((d) => (
-                        <span key={d.dim} className="wb-td-dim">
-                          <span className="wb-td-dim-name">{d.dim}</span>
-                          {d.tags.map((t) => <span key={t} className="wb-td-tag">{t}</span>)}
-                        </span>
-                      ))}
-                  </div>
-                </td>
-                <td><span className="wb-senti" style={{ background: SENTIMENT_COLOR[r.result.sentiment] }}>{r.result.sentiment}</span></td>
-              </tr>
-            ))}
+            {visibleRows.map((r) => {
+              const dims = visibleDims
+                ? r.result.dims.filter((d) => visibleDims.includes(d.dim))
+                : r.result.dims
+              return (
+                <tr key={r.id}>
+                  <td className="wb-td-text" title={r.text}>{r.text.length > 40 ? r.text.slice(0, 40) + '…' : r.text}</td>
+                  <td>
+                    <div className="wb-td-tags">
+                      {dims.length === 0
+                        ? <span className="wb-td-none">未命中维度</span>
+                        : dims.map((d) => (
+                          <span key={d.dim} className="wb-td-dim">
+                            <span className="wb-td-dim-name">{d.dim}</span>
+                            {d.tags.map((t) => <span key={t} className="wb-td-tag">{t}</span>)}
+                          </span>
+                        ))}
+                    </div>
+                  </td>
+                  <td><span className="wb-senti" style={{ background: SENTIMENT_COLOR[r.result.sentiment] }}>{r.result.sentiment}</span></td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
 
       <div className="wb-job-foot">
-        <button className="wb-btn" onClick={onOpenBoard}><SvgIcon id="i-bar" size={12} /> 在右侧面板展开查看</button>
+        <button className="wb-btn" onClick={onOpenBoard}><SvgIcon id="i-bar" size={12} /> 在右侧面板展开</button>
+        <button className="wb-btn primary" onClick={onOpenFullscreen}><SvgIcon id="i-box" size={12} /> 全屏查看</button>
       </div>
     </div>
   )
@@ -810,16 +894,21 @@ function JobBoard({
   onToggleFullscreen: () => void
 }) {
   const senti = { 正面: 0, 中性: 0, 负面: 0 } as Record<string, number>
-  job.rows.forEach((r) => { senti[r.result.sentiment] = (senti[r.result.sentiment] ?? 0) + 1 })
+  const visibleRows = job.config.sentimentFilter
+    ? job.rows.filter((r) => job.config.sentimentFilter!.includes(r.result.sentiment))
+    : job.rows
+  visibleRows.forEach((r) => { senti[r.result.sentiment] = (senti[r.result.sentiment] ?? 0) + 1 })
+  const visibleDims = job.config.dimensions ?? null
 
   function downloadCSV() {
-    const headers = ['评论原文', '情感', ...VOC_DIMENSION_NAMES]
-    const rows = job.rows.map((r) => {
+    const dims = visibleDims ?? VOC_DIMENSION_NAMES
+    const rows = visibleRows.map((r) => {
       const dimMap: Record<string, string> = {}
-      r.result.dims.forEach((d) => { dimMap[d.dim] = d.tags.join('、') })
-      return [r.text, r.result.sentiment, ...VOC_DIMENSION_NAMES.map((d) => dimMap[d] ?? '')]
+      const ds = visibleDims ? r.result.dims.filter((d) => visibleDims.includes(d.dim)) : r.result.dims
+      ds.forEach((d) => { dimMap[d.dim] = d.tags.join('、') })
+      return [r.text, r.result.sentiment, ...dims.map((d) => dimMap[d] ?? '')]
     })
-    const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const csv = [['评论原文', '情感', ...dims], ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -843,6 +932,14 @@ function JobBoard({
           )}
         </div>
       </div>
+
+      {(job.config.instruction || visibleDims || job.config.sentimentFilter) && (
+        <div className="wb-board-config">
+          {job.config.instruction ? <span className="wb-board-cfg-item" title={job.config.instruction}>指令：{job.config.instruction}</span> : null}
+          {visibleDims ? <span className="wb-board-cfg-item">只看维度：{visibleDims.join('、')}</span> : null}
+          {job.config.sentimentFilter ? <span className="wb-board-cfg-item">只看情感：{job.config.sentimentFilter.join('、')}</span> : null}
+        </div>
+      )}
 
       <div className="wb-board-status">
         <div className="wb-board-progress-wrap">
@@ -879,27 +976,32 @@ function JobBoard({
             </tr>
           </thead>
           <tbody>
-            {job.rows.length === 0 && (
+            {visibleRows.length === 0 && (
               <tr><td colSpan={3} className="wb-table-empty">等待小灵开始扫描…</td></tr>
             )}
-            {job.rows.map((r) => (
-              <tr key={r.id}>
-                <td className="wb-td-text" title={r.text}>{r.text}</td>
-                <td>
-                  <div className="wb-td-tags">
-                    {r.result.dims.length === 0
-                      ? <span className="wb-td-none">未命中维度</span>
-                      : r.result.dims.map((d) => (
-                        <span key={d.dim} className="wb-td-dim">
-                          <span className="wb-td-dim-name">{d.dim}</span>
-                          {d.tags.map((t) => <span key={t} className="wb-td-tag">{t}</span>)}
-                        </span>
-                      ))}
-                  </div>
-                </td>
-                <td><span className="wb-senti" style={{ background: SENTIMENT_COLOR[r.result.sentiment] }}>{r.result.sentiment}</span></td>
-              </tr>
-            ))}
+            {visibleRows.map((r) => {
+              const dims = visibleDims
+                ? r.result.dims.filter((d) => visibleDims.includes(d.dim))
+                : r.result.dims
+              return (
+                <tr key={r.id}>
+                  <td className="wb-td-text" title={r.text}>{r.text}</td>
+                  <td>
+                    <div className="wb-td-tags">
+                      {dims.length === 0
+                        ? <span className="wb-td-none">未命中维度</span>
+                        : dims.map((d) => (
+                          <span key={d.dim} className="wb-td-dim">
+                            <span className="wb-td-dim-name">{d.dim}</span>
+                            {d.tags.map((t) => <span key={t} className="wb-td-tag">{t}</span>)}
+                          </span>
+                        ))}
+                    </div>
+                  </td>
+                  <td><span className="wb-senti" style={{ background: SENTIMENT_COLOR[r.result.sentiment] }}>{r.result.sentiment}</span></td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
