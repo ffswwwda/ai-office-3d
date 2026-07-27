@@ -159,26 +159,31 @@ function ToolRoom({ agentId, kb }: { agentId: string; kb: ReturnType<typeof kbOf
     setBusy(true)
     setScanText(text)
     setScanDim(0)
-    const result = tagComment(text)
-    for (let i = 0; i < VOC_DIMENSION_NAMES.length; i++) {
-      setScanDim(i)
-      await sleep(170)
+    try {
+      const result = tagComment(text)
+      for (let i = 0; i < VOC_DIMENSION_NAMES.length; i++) {
+        setScanDim(i)
+        await sleep(170)
+      }
+      setRows((prev) => [...prev, { id: rid(), text, result }])
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('VOC 打标失败', e)
+    } finally {
+      setBusy(false)
+      setScanText('')
+      setScanDim(-1)
+      busyRef.current = false
     }
-    setRows((prev) => [...prev, { id: rid(), text, result }])
-    setBusy(false)
-    setScanText('')
-    setScanDim(-1)
-    busyRef.current = false
   }
 
   async function runDemo() {
     if (busyRef.current) return
-    busyRef.current = true
-    for (const c of VOC_SAMPLES) {
-      await processOne(c)
-      await sleep(220)
+    for (let idx = 0; idx < VOC_SAMPLES.length; idx++) {
+      if (busyRef.current) break
+      await processOne(VOC_SAMPLES[idx])
+      if (idx < VOC_SAMPLES.length - 1) await sleep(220)
     }
-    busyRef.current = false
   }
 
   function submit() {
