@@ -2236,3 +2236,84 @@ input[type="date"].mr-input { color-scheme: dark; }
 }
 .wb-job-progress-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #00d4ff, #a855f7); transition: width .2s ease; }
 .wb-job-summary { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 13px; }
+
+/* ═══ 工作台三栏布局 + 右侧工作看板 ═══ */
+.wb-panel-with-board {
+  width: min(1400px, 100%);
+}
+.wb-work-area {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  border-right: 1px solid rgba(255,255,255,.08);
+}
+
+/* 停止按钮 */
+.wb-btn.stop {
+  background: rgba(255,107,157,.18); border-color: rgba(255,107,157,.45); color: #fff;
+}
+.wb-btn.stop:hover { background: rgba(255,107,157,.28); }
+
+/* 聊天流任务卡底部 */
+.wb-job-foot {
+  display: flex; gap: 8px; padding: 10px 13px;
+  border-top: 1px solid rgba(255,255,255,.06); background: rgba(255,255,255,.02);
+}
+.wb-job-foot .wb-btn { padding: 5px 10px; font-size: 11.5px; }
+
+/* ── 右侧工作看板 ── */
+.wb-board {
+  width: 420px; flex: none; min-width: 0;
+  display: flex; flex-direction: column;
+  background: rgba(10, 12, 24, 0.55);
+  border-left: 1px solid rgba(255,255,255,.08);
+}
+.wb-board-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.04);
+}
+.wb-board-title { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 800; color: #fff; }
+.wb-board-title svg { color: var(--wb-accent, #00d4ff); }
+.wb-board-actions { display: flex; align-items: center; gap: 6px; }
+.wb-board-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 700; padding: 5px 10px; border-radius: 7px; cursor: pointer;
+  background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14); color: #e0e0f4;
+}
+.wb-board-btn:hover { background: rgba(255,255,255,.13); }
+.wb-board-btn.close { padding: 5px; }
+
+.wb-board-status { padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.wb-board-progress-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.wb-board-progress { flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+.wb-board-progress-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #00d4ff, #a855f7); transition: width .2s ease; }
+.wb-board-progress-text { font-size: 11px; color: #b0b0cc; white-space: nowrap; }
+.wb-board-summary { display: flex; flex-wrap: wrap; gap: 7px; }
+
+.wb-board-scan {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.wb-board-scan .wb-scan-dim { font-size: 10.5px; padding: 3px 8px; }
+
+.wb-board-table-wrap {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 0 16px 16px;
+}
+.wb-board-table-wrap .wb-table { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; overflow: hidden; background: rgba(0,0,0,.18); }
+.wb-board-table-wrap .wb-td-text { max-width: 360px; }
+
+/* ── 工作看板全屏 ── */
+.wb-board-fullscreen-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(8, 10, 22, 0.96);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  padding: 24px;
+  display: flex; align-items: center; justify-content: center;
+}
+.wb-board.fullscreen {
+  width: 100%; height: 100%;
+  border: 1px solid rgba(255,255,255,.12); border-radius: 16px;
+  background: rgba(18, 20, 34, 0.98);
+}
+.wb-board.fullscreen .wb-board-table-wrap .wb-td-text { max-width: 520px; }

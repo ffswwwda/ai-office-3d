@@ -69,12 +69,14 @@ export async function chatOnce(
   return callLLM([{ role: 'system', content: system }, { role: 'user', content: userContent }], opts)
 }
 
-/** 流式对话（SSE）。逐 chunk 回调 onToken，最终返回完整文本。失败抛错由上层回退。 */
+/** 流式对话（SSE）。逐 chunk 回调 onToken，最终返回完整文本。失败抛错由上层回退。
+ *  opts.signal 可用来主动中断流式输出（中断会抛出 name='AbortError' 的错误）。
+ */
 export async function streamChat(
   system: string,
   user: string | LLMContentPart[],
   onToken: (delta: string) => void,
-  opts?: { temperature?: number; images?: string[]; timeoutMs?: number },
+  opts?: { temperature?: number; images?: string[]; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<string> {
   const cfg = getLLMConfig()
   const key = cfg.key.trim()
@@ -94,6 +96,12 @@ export async function streamChat(
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const externalSignal = opts?.signal
+  const onExternalAbort = () => controller.abort()
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort()
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+  }
 
   try {
     const res = await fetch(url, {
@@ -141,5 +149,8 @@ export async function streamChat(
     return full
   } finally {
     clearTimeout(timer)
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort)
+    }
   }
 }

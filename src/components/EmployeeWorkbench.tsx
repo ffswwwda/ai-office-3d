@@ -47,6 +47,7 @@ type TagJob = {
   currentDim: number
   rows: VocRow[]
   done: boolean
+  cancelled: boolean
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -98,6 +99,8 @@ const isTableFile = (f: File) =>
   f.type === 'text/csv' || f.type === 'text/tab-separated-values' || f.type === 'text/plain' ||
   /\.(csv|tsv|txt)$/i.test(f.name)
 
+const isTableFileByName = (name: string) => /\.(csv|tsv|txt)$/i.test(name)
+
 export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const kb = useMemo(() => kbOf(agentId), [agentId])
   const accent = colorHex(agentId)
@@ -116,15 +119,81 @@ export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClo
     return () => { alive = false }
   }, [agentId])
 
+  // ---- 工作看板（任务状态提升到顶层，右侧展示） ----
+  const [jobs, setJobs] = useState<Record<string, TagJob>>({})
+  const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [jobBoardOpen, setJobBoardOpen] = useState(false)
+  const [jobBoardFullscreen, setJobBoardFullscreen] = useState(false)
+  const stopBatchRef = useRef<Record<string, boolean>>({})
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  function registerJob(fileName: string, total: number): string {
+    const id = rid()
+    const job: TagJob = { id, fileName, total, current: 0, currentDim: -1, rows: [], done: false, cancelled: false }
+    setJobs((prev) => ({ ...prev, [id]: job }))
+    setActiveJobId(id)
+    setJobBoardOpen(true)
+    return id
+  }
+
+  async function startBatchTag(fileName: string, rows: string[]): Promise<string> {
+    const jobId = registerJob(fileName, rows.length)
+    stopBatchRef.current[jobId] = false
+
+    // 根据总量动态调整演示粒度，避免大文件卡死
+    const isBig = rows.length > 200
+    const dimDelay = isBig ? 12 : rows.length > 50 ? 35 : 90
+    const batchSize = isBig ? 10 : 1
+
+    for (let idx = 0; idx < rows.length; idx++) {
+      if (stopBatchRef.current[jobId]) {
+        setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], cancelled: true, done: true, currentDim: -1 } }))
+        return jobId
+      }
+      const text = rows[idx]
+      setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: idx, currentDim: 0 } }))
+      const result = tagComment(text)
+
+      // 每 batchSize 行展示一次 9 维扫描动画
+      if (idx % batchSize === 0 || idx === rows.length - 1) {
+        for (let d = 0; d < VOC_DIMENSION_NAMES.length; d++) {
+          setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], currentDim: d } }))
+          await sleep(dimDelay)
+        }
+      }
+
+      const row: VocRow = { id: rid(), text, result }
+      setJobs((prev) => ({
+        ...prev,
+        [jobId]: { ...prev[jobId], rows: [...prev[jobId].rows, row], currentDim: -1 },
+      }))
+
+      // 每处理完一行让出时间片，保证 UI 响应 + 可被停止
+      await sleep(isBig ? 10 : 30)
+    }
+
+    setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: rows.length, currentDim: -1, done: true } }))
+    return jobId
+  }
+
+  function stopBatchTag(jobId: string) {
+    stopBatchRef.current[jobId] = true
+  }
+
+  const activeJob = activeJobId ? jobs[activeJobId] : null
+
   return createPortal(
     <div className="wb-overlay" onClick={onClose}>
-      <div className="wb-panel" style={{ ['--wb-accent' as any]: accent }} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={'wb-panel' + (jobBoardOpen ? ' wb-panel-with-board' : '')}
+        style={{ ['--wb-accent' as any]: accent }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="wb-head">
           <div className="wb-avatar"><span>{kb.name.slice(0, 1)}</span></div>
           <div className="wb-head-info">
@@ -180,8 +249,8 @@ export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClo
             </div>
           </aside>
 
-          {/* 右：工具间 / 私聊 */}
-          <section className="wb-right">
+          {/* 中：工具间 / 私聊 */}
+          <section className="wb-work-area">
             <div className="wb-tabs">
               <button className={'wb-tab' + (tab === 'tool' ? ' on' : '')} onClick={() => setTab('tool')}>
                 <SvgIcon id="i-box" size={13} /> 工具间
@@ -192,8 +261,28 @@ export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClo
             </div>
             {tab === 'tool'
               ? <ToolRoom agentId={agentId} kb={kb} />
-              : <PrivateChat agentId={agentId} memRef={memRef} />}
+              : <PrivateChat
+                  agentId={agentId}
+                  memRef={memRef}
+                  onStartBatch={startBatchTag}
+                  onRegisterJob={registerJob}
+                  jobs={jobs}
+                  setJobs={setJobs}
+                  stopBatchTag={stopBatchTag}
+                  setActiveJobId={setActiveJobId}
+                  setJobBoardOpen={setJobBoardOpen}
+                />}
           </section>
+
+          {/* 右：工作看板 */}
+          {jobBoardOpen && activeJob && (
+            <JobBoard
+              job={activeJob}
+              onClose={() => setJobBoardOpen(false)}
+              fullscreen={jobBoardFullscreen}
+              onToggleFullscreen={() => setJobBoardFullscreen((v) => !v)}
+            />
+          )}
         </div>
       </div>
     </div>,
@@ -301,7 +390,12 @@ function ToolRoom({ agentId, kb }: { agentId: string; kb: ReturnType<typeof kbOf
           placeholder="把一条用户评论贴在这里，回车或点「打标」让小灵实时拆解到 9 个维度…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() } }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              submit()
+            }
+          }}
           disabled={busy}
         />
         <button className="wb-btn primary" onClick={submit} disabled={busy || !input.trim()}>
@@ -355,7 +449,27 @@ function ToolRoom({ agentId, kb }: { agentId: string; kb: ReturnType<typeof kbOf
 }
 
 /* ----------------------------- 私聊 ----------------------------- */
-function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.MutableRefObject<string> }) {
+function PrivateChat({
+  agentId,
+  memRef,
+  onStartBatch,
+  onRegisterJob,
+  jobs,
+  setJobs,
+  stopBatchTag,
+  setActiveJobId,
+  setJobBoardOpen,
+}: {
+  agentId: string
+  memRef: React.MutableRefObject<string>
+  onStartBatch: (fileName: string, rows: string[]) => Promise<string>
+  onRegisterJob: (fileName: string, total: number) => string
+  jobs: Record<string, TagJob>
+  setJobs: React.Dispatch<React.SetStateAction<Record<string, TagJob>>>
+  stopBatchTag: (jobId: string) => void
+  setActiveJobId: (id: string | null) => void
+  setJobBoardOpen: (open: boolean) => void
+}) {
   const kb = useMemo(() => kbOf(agentId), [agentId])
   const [msgs, setMsgs] = useState<ChatLine[]>([])
   const [input, setInput] = useState('')
@@ -363,9 +477,11 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
   const [busy, setBusy] = useState(false)
   const [attach, setAttach] = useState<UserFile | null>(null)
   const [attachPreview, setAttachPreview] = useState<string | null>(null)
-  const [jobs, setJobs] = useState<Record<string, TagJob>>({})
+  const [composing, setComposing] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const abortCtrlRef = useRef<AbortController | null>(null)
+  const activeBatchRef = useRef<string | null>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -402,28 +518,42 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  async function runBatchTag(fileName: string, rows: string[]) {
-    const jobId = rid()
-    const job: TagJob = { id: jobId, fileName, total: rows.length, current: 0, currentDim: -1, rows: [], done: false }
-    setJobs((prev) => ({ ...prev, [jobId]: job }))
+  async function runLocalBatchTag(fileName: string, rows: string[]) {
+    const jobId = onRegisterJob(fileName, rows.length)
+    activeBatchRef.current = jobId
+    setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：收到 ${fileName}，共 ${rows.length} 条，我现在逐维扫描打标…`, job: { id: jobId, fileName, total: rows.length, current: 0, currentDim: -1, rows: [], done: false, cancelled: false } }])
+
+    const isBig = rows.length > 200
+    const dimDelay = isBig ? 12 : rows.length > 50 ? 35 : 90
+    const batchSize = isBig ? 10 : 1
 
     for (let idx = 0; idx < rows.length; idx++) {
+      const job = jobs[jobId]
+      if (job?.cancelled || activeBatchRef.current !== jobId) {
+        setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], cancelled: true, done: true, currentDim: -1 } }))
+        return
+      }
       const text = rows[idx]
       setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: idx, currentDim: 0 } }))
       const result = tagComment(text)
-      for (let d = 0; d < VOC_DIMENSION_NAMES.length; d++) {
-        setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], currentDim: d } }))
-        await sleep(90)
+
+      if (idx % batchSize === 0 || idx === rows.length - 1) {
+        for (let d = 0; d < VOC_DIMENSION_NAMES.length; d++) {
+          setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], currentDim: d } }))
+          await sleep(dimDelay)
+        }
       }
+
       const row: VocRow = { id: rid(), text, result }
       setJobs((prev) => ({
         ...prev,
         [jobId]: { ...prev[jobId], rows: [...prev[jobId].rows, row], currentDim: -1 },
       }))
-      await sleep(120)
+      await sleep(isBig ? 10 : 30)
     }
 
     setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: rows.length, currentDim: -1, done: true } }))
+    activeBatchRef.current = null
   }
 
   async function send() {
@@ -445,9 +575,7 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
         if (rows.length === 0) {
           setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：我没从文件里读到有效评论行。请检查文件是不是 CSV / TSV / TXT，且每行是一条评论；如果是表格，第一行最好有「评论」或「content」列名。` }])
         } else {
-          const jobId = rid()
-          setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：收到 ${currentAttach.name}，共 ${rows.length} 条，我现在逐维扫描打标…`, job: { id: jobId, fileName: currentAttach.name, total: rows.length, current: 0, currentDim: -1, rows: [], done: false } }])
-          await runBatchTag(currentAttach.name, rows)
+          await runLocalBatchTag(currentAttach.name, rows)
         }
       } finally {
         setBusy(false)
@@ -465,16 +593,44 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
     setBusy(true)
     setTyping('')
     const system = composeSystemPrompt(agentId, memRef.current)
+    abortCtrlRef.current = new AbortController()
     try {
-      const full = await streamChat(system, text || '请看看这张图并给出你的分析。', (d) => setTyping((t) => t + d), { images })
+      const full = await streamChat(
+        system,
+        text || '请看看这张图并给出你的分析。',
+        (d) => setTyping((t) => t + d),
+        { images, signal: abortCtrlRef.current.signal },
+      )
       setMsgs((m) => [...m, { role: 'emp', text: full }])
-    } catch {
-      setMsgs((m) => [...m, { role: 'emp', text: fallbackReply(text || '图片分析') }])
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError' || (err as Error)?.message?.includes('aborted')) {
+        setMsgs((m) => [...m, { role: 'emp', text: typing || '（已停止输出）' }])
+      } else {
+        setMsgs((m) => [...m, { role: 'emp', text: fallbackReply(text || '图片分析') }])
+      }
     } finally {
       setTyping('')
       setBusy(false)
+      abortCtrlRef.current = null
     }
   }
+
+  function stop() {
+    // 停止 LLM 流式
+    if (abortCtrlRef.current) {
+      abortCtrlRef.current.abort()
+      abortCtrlRef.current = null
+    }
+    // 停止批量打标
+    if (activeBatchRef.current) {
+      stopBatchTag(activeBatchRef.current)
+      activeBatchRef.current = null
+    }
+    setBusy(false)
+  }
+
+  const canSend = !busy && (!!input.trim() || !!attach)
+  const canStop = busy
 
   return (
     <div className="wb-chat">
@@ -500,7 +656,13 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
                 {m.text ? m.text : null}
               </div>
             </div>
-            {m.job && <BatchTagJob jobId={m.job.id} jobs={jobs} setJobs={setJobs} />}
+            {m.job && (
+              <BatchTagJob
+                jobId={m.job.id}
+                jobs={jobs}
+                onOpenBoard={() => { setActiveJobId(m.job!.id); setJobBoardOpen(true) }}
+              />
+            )}
           </div>
         ))}
         {typing && (
@@ -538,21 +700,28 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
           placeholder={`和 ${kb.name} 说点什么…（Enter 发送，Shift+Enter 换行；可传图片/CSV/TXT）`}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !composing) {
+              e.preventDefault()
+              if (canSend) send()
+            }
           }}
           disabled={busy}
         />
-        <button className="wb-btn primary" onClick={send} disabled={busy || (!input.trim() && !attach)}>发送</button>
+        {canStop ? (
+          <button className="wb-btn stop" onClick={stop}>停止</button>
+        ) : (
+          <button className="wb-btn primary" onClick={send} disabled={!canSend}>发送</button>
+        )}
       </div>
     </div>
   )
 }
 
-const isTableFileByName = (name: string) => /\.(csv|tsv|txt)$/i.test(name)
-
-/* ----------------------------- 批量打标任务可视化 ----------------------------- */
-function BatchTagJob({ jobId, jobs, setJobs }: { jobId: string; jobs: Record<string, TagJob>; setJobs: React.Dispatch<React.SetStateAction<Record<string, TagJob>>> }) {
+/* ----------------------------- 批量打标任务可视化（聊天流里的小卡片） ----------------------------- */
+function BatchTagJob({ jobId, jobs, onOpenBoard }: { jobId: string; jobs: Record<string, TagJob>; onOpenBoard: () => void }) {
   const job = jobs[jobId]
   if (!job) return null
   const senti = { 正面: 0, 中性: 0, 负面: 0 } as Record<string, number>
@@ -562,10 +731,12 @@ function BatchTagJob({ jobId, jobs, setJobs }: { jobId: string; jobs: Record<str
     <div className="wb-job">
       <div className="wb-job-head">
         <div className="wb-job-title"><SvgIcon id="w-tag" size={13} /> 批量 VOC 打标：{job.fileName}</div>
-        <div className="wb-job-meta">{job.done ? `已完成 ${job.total} 条` : `处理中 ${job.current + (job.currentDim >= 0 ? 1 : 0)} / ${job.total} 条`}</div>
+        <div className="wb-job-meta">
+          {job.cancelled ? `已停止 ${job.rows.length} / ${job.total} 条` : job.done ? `已完成 ${job.total} 条` : `处理中 ${job.current + (job.currentDim >= 0 ? 1 : 0)} / ${job.total} 条`}
+        </div>
       </div>
 
-      {!job.done && (
+      {!job.done && !job.cancelled && (
         <div className="wb-job-scan">
           <div className="wb-job-progress"><div className="wb-job-progress-bar" style={{ width: `${Math.min(100, (job.current / Math.max(1, job.total)) * 100)}%` }} /></div>
           <div className="wb-scan" style={{ marginBottom: 0 }}>
@@ -617,6 +788,130 @@ function BatchTagJob({ jobId, jobs, setJobs }: { jobId: string; jobs: Record<str
           </tbody>
         </table>
       </div>
+
+      <div className="wb-job-foot">
+        <button className="wb-btn" onClick={onOpenBoard}><SvgIcon id="i-bar" size={12} /> 在右侧面板展开查看</button>
+      </div>
     </div>
   )
+}
+
+/* ----------------------------- 右侧工作看板（可全屏） ----------------------------- */
+function JobBoard({
+  job,
+  onClose,
+  fullscreen,
+  onToggleFullscreen,
+}: {
+  job: TagJob
+  onClose: () => void
+  fullscreen: boolean
+  onToggleFullscreen: () => void
+}) {
+  const senti = { 正面: 0, 中性: 0, 负面: 0 } as Record<string, number>
+  job.rows.forEach((r) => { senti[r.result.sentiment] = (senti[r.result.sentiment] ?? 0) + 1 })
+
+  function downloadCSV() {
+    const headers = ['评论原文', '情感', ...VOC_DIMENSION_NAMES]
+    const rows = job.rows.map((r) => {
+      const dimMap: Record<string, string> = {}
+      r.result.dims.forEach((d) => { dimMap[d.dim] = d.tags.join('、') })
+      return [r.text, r.result.sentiment, ...VOC_DIMENSION_NAMES.map((d) => dimMap[d] ?? '')]
+    })
+    const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `voc-tag-${job.fileName.replace(/\.[^.]+$/, '')}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const panel = (
+    <div className={'wb-board' + (fullscreen ? ' fullscreen' : '')}>
+      <div className="wb-board-head">
+        <div className="wb-board-title"><SvgIcon id="w-tag" size={14} /> 工作看板 · {job.fileName}</div>
+        <div className="wb-board-actions">
+          <button className="wb-board-btn" onClick={downloadCSV} title="下载 CSV"><SvgIcon id="i-doc" size={13} /> 导出</button>
+          <button className="wb-board-btn" onClick={onToggleFullscreen} title={fullscreen ? '退出全屏' : '全屏'}>
+            <SvgIcon id={fullscreen ? 'i-close' : 'i-box'} size={13} /> {fullscreen ? '退出全屏' : '全屏'}
+          </button>
+          {!fullscreen && (
+            <button className="wb-board-btn close" onClick={onClose} title="收起"><SvgIcon id="i-close" size={13} /></button>
+          )}
+        </div>
+      </div>
+
+      <div className="wb-board-status">
+        <div className="wb-board-progress-wrap">
+          <div className="wb-board-progress">
+            <div className="wb-board-progress-bar" style={{ width: `${Math.min(100, (job.rows.length / Math.max(1, job.total)) * 100)}%` }} />
+          </div>
+          <div className="wb-board-progress-text">
+            {job.cancelled ? `已停止：${job.rows.length} / ${job.total} 条` : job.done ? `已完成：${job.total} 条` : `处理中：${job.rows.length} / ${job.total} 条`}
+          </div>
+        </div>
+        <div className="wb-board-summary">
+          <span className="wb-sum-pill">已标注 <b>{job.rows.length}</b> 条</span>
+          <span className="wb-sum-pill" style={{ color: SENTIMENT_COLOR['正面'] }}>正面 {senti['正面']}</span>
+          <span className="wb-sum-pill" style={{ color: SENTIMENT_COLOR['中性'] }}>中性 {senti['中性']}</span>
+          <span className="wb-sum-pill" style={{ color: SENTIMENT_COLOR['负面'] }}>负面 {senti['负面']}</span>
+        </div>
+      </div>
+
+      {!job.done && !job.cancelled && (
+        <div className="wb-board-scan">
+          {VOC_DIMENSION_NAMES.map((d, i) => (
+            <span key={d} className={'wb-scan-dim' + (job.currentDim === i ? ' scanning' : '')}>{d}</span>
+          ))}
+        </div>
+      )}
+
+      <div className="wb-board-table-wrap">
+        <table className="wb-table">
+          <thead>
+            <tr>
+              <th style={{ width: '38%' }}>评论原文</th>
+              <th>9 维标签</th>
+              <th style={{ width: '72px' }}>情感</th>
+            </tr>
+          </thead>
+          <tbody>
+            {job.rows.length === 0 && (
+              <tr><td colSpan={3} className="wb-table-empty">等待小灵开始扫描…</td></tr>
+            )}
+            {job.rows.map((r) => (
+              <tr key={r.id}>
+                <td className="wb-td-text" title={r.text}>{r.text}</td>
+                <td>
+                  <div className="wb-td-tags">
+                    {r.result.dims.length === 0
+                      ? <span className="wb-td-none">未命中维度</span>
+                      : r.result.dims.map((d) => (
+                        <span key={d.dim} className="wb-td-dim">
+                          <span className="wb-td-dim-name">{d.dim}</span>
+                          {d.tags.map((t) => <span key={t} className="wb-td-tag">{t}</span>)}
+                        </span>
+                      ))}
+                  </div>
+                </td>
+                <td><span className="wb-senti" style={{ background: SENTIMENT_COLOR[r.result.sentiment] }}>{r.result.sentiment}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+
+  if (fullscreen) {
+    return createPortal(
+      <div className="wb-board-fullscreen-overlay">
+        {panel}
+      </div>,
+      document.body,
+    )
+  }
+  return panel
 }
