@@ -8,10 +8,11 @@ import {
   getLLMConfig, setLLMConfig, isLLMEnabled,
 } from '@/store/workspaceStore'
 import {
-  buildReply, buildPlanItems, buildPlanDoc,
+  buildPlanItems, buildPlanDoc,
   buildTaskStages, buildStageOutput, buildStageOutputLLM, resolveSpeakers,
   buildTaskOutput, detectFileRequest, buildChatAttachment, downloadAttachment,
-  type ChatMsg, type MeetingContext, type ChatAttachment,
+  streamReply, planSpeakers, buildBoard, normalizePunct,
+  type ChatMsg, type MeetingContext, type ChatAttachment, type BoardInsight,
 } from '@/lib/meetingEngine'
 import { kbOf, describeSources, DATA_SOURCE_REGISTRY, isGuest } from '@/lib/employeeKB'
 import { getMemory, clearMemory, addMemory, summarizeForMemory } from '@/lib/employeeMemory'
@@ -88,22 +89,24 @@ function randomDoubaoRefusal() {
   return DOUBAO_REFUSALS[Math.floor(Math.random() * DOUBAO_REFUSALS.length)]
 }
 
-/** 右侧「会议看板」：实时主题 / 目的 / 成员 / 近期观点汇总 + 汇总执行方案入口 */
+/** 右侧「会议看板」：实时把讨论拆成 事实 / 观点 / 行动指向 / 风险，方便人直接看懂、便于汇总报告 */
 function MeetingSummaryPanel({
-  topic, purpose, messages, invited, onMakePlan, planBuilding, canMakePlan,
+  topic, purpose, invited, board, onMakePlan, planBuilding, canMakePlan,
 }: {
   topic: string
   purpose: string
-  messages: ChatMsg[]
   invited: string[]
+  board: BoardInsight | null
   onMakePlan?: () => void
   planBuilding?: boolean
   canMakePlan?: boolean
 }) {
-  const opinions = messages
-    .filter((m) => m.role !== 'user' && m.text)
-    .slice(-7)
-    .map((m) => ({ who: nameOf(m.role), text: m.text.replace(/\n+/g, ' ').trim(), color: colorHex(m.role) }))
+  const cols: Array<{ key: keyof BoardInsight; label: string; icon: string; color: string }> = [
+    { key: 'facts', label: '事实', icon: 'i-bar', color: '#4fd1ff' },
+    { key: 'views', label: '观点', icon: 'i-msg', color: '#b794f6' },
+    { key: 'actions', label: '行动指向', icon: 'i-zap', color: '#ffd166' },
+    { key: 'risks', label: '风险 / 待确认', icon: 'i-alert', color: '#ff6b9d' },
+  ]
   return (
     <div className="mr-summary">
       <div className="mr-section-title"><SvgIcon id="i-doc" size={12} /> 会议看板</div>
@@ -117,22 +120,31 @@ function MeetingSummaryPanel({
           </span>
         ))}
       </div>
-      <div className="mr-sum-title">近期观点</div>
-      <div className="mr-sum-points">
-        {opinions.length === 0 ? (
-          <div className="mr-sum-empty">讨论开始后，这里实时汇总各方观点</div>
-        ) : (
-          opinions.map((p, i) => (
-            <div key={i} className="mr-sum-point">
-              <span className="mr-sum-dot" style={{ background: p.color }} />
-              <div className="mr-sum-point-body">
-                <b>{p.who}</b>
-                <p>{p.text.length > 120 ? p.text.slice(0, 120) + '…' : p.text}</p>
+
+      <div className="mr-board-cols">
+        {cols.map((c) => {
+          const items = board?.[c.key] ?? []
+          return (
+            <div key={c.key} className="mr-board-col">
+              <div className="mr-board-col-head" style={{ color: c.color }}>
+                <SvgIcon id={c.icon} size={11} />
+                <span>{c.label}</span>
+                <span className="mr-board-count">{items.length}</span>
+              </div>
+              <div className="mr-board-list">
+                {items.length === 0 ? (
+                  <div className="mr-board-empty">讨论后自动归集</div>
+                ) : (
+                  items.map((it, i) => (
+                    <div key={i} className="mr-board-item" style={{ borderLeftColor: c.color }}>{it}</div>
+                  ))
+                )}
               </div>
             </div>
-          ))
-        )}
+          )
+        })}
       </div>
+
       {onMakePlan && (
         <button
           className="mr-btn primary mr-summary-action"
@@ -315,6 +327,11 @@ function MeetingRoom({
   const [planBuilding, setPlanBuilding] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [showEmoji, setShowEmoji] = useState(false)
+  const [typing, setTyping] = useState<{ id: string; color: number; text: string } | null>(null)
+  const [board, setBoard] = useState<BoardInsight | null>(null)
+  const [maxRounds, setMaxRounds] = useState(3)
+  const discussionRound = useRef(0)
+  const typingTarget = useRef('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const chatRef = useRef<HTMLDivElement>(null)
@@ -366,6 +383,8 @@ function MeetingRoom({
     if (invited.length === 0) return
     setMessages([{ role: 'user', text: `主题：${topic}\n目的：${purpose}\n会议时间：${meetingDate || '未指定'}` }])
     setDoubaoState('hidden') // 新会议重置访客状态
+    discussionRound.current = 0
+    setBoard(null)
     setStep('discuss')
   }
 
@@ -427,11 +446,38 @@ function MeetingRoom({
     setTimeout(() => setNotice(''), 3200)
   }
 
-  /** 公共：让数字员工对最新一条用户消息依次发言；images 为发起人消息携带的图片 data URL（视觉模型可见） */
+  /** 打字机：把全文规范化后逐字显现到 typing 状态，结束时 resolve */
+  const typeOut = (full: string, id: string) => new Promise<void>((resolve) => {
+    const text = normalizePunct(full)
+    let i = 0
+    setTyping({ id, color: colorNum(id), text: '' })
+    const timer = setInterval(() => {
+      // 每次推进 1-2 字，速度偏快但能看清
+      i += Math.random() < 0.5 ? 1 : 2
+      if (i >= text.length) {
+        setTyping({ id, color: colorNum(id), text })
+        clearInterval(timer)
+        resolve()
+        return
+      }
+      setTyping({ id, color: colorNum(id), text: text.slice(0, i) })
+    }, 16)
+  })
+
+  /** 公共：让员工对最新一条用户消息发言。
+   *  - 用户说「轮流/大家说…」→ 全员轮流（round-robin）
+   *  - 否则自由讨论：按相关性挑 1-3 人发言（planSpeakers）
+   *  - 累计讨论达 maxRounds 轮后，插入 host 问询请发起人给建议
+   *  - 打字机流式输出
+   */
   const runResponses = async (thread: ChatMsg[], images: string[]) => {
     const lastUser = thread.filter((m) => m.role === 'user').slice(-1)[0]
     const text = lastUser?.text ?? purpose
-    const speakers = resolveSpeakers(text, invited, nameOf)
+    const roundRobin = /(轮流|依次|每人|逐个|挨个|都发言|轮到|各说一句|分别说|依次说|大家轮流|所有人轮流|都来讲|都来聊|都来说|大家说|大家|所有人|各位|一起说|全体|分别|各自|各抒己见|群策群力)/.test(text)
+    const speakers = roundRobin
+      ? resolveSpeakers(text, invited, nameOf)
+      : await planSpeakers(text, thread, invited, nameOf, topic, purpose)
+
     // 检测是否要文件：指定人优先，否则找第一个有数据能力的非访客员工
     const wantsFile = detectFileRequest(text)
     let fileOwner: string | null = null
@@ -443,10 +489,14 @@ function MeetingRoom({
         attachment = await buildChatAttachment(fileOwner, text, { topic, purpose, thread }, nameOf)
       }
     }
+
+    const localMsgs: ChatMsg[] = [...thread]
     setBusy(true)
+    discussionRound.current += 1
     for (const id of speakers) {
       setRespondingId(id)
-      const reply = await buildReply(
+      typingTarget.current = ''
+      const full = await streamReply(
         id,
         { topic, purpose, thread },
         nameOf,
@@ -454,14 +504,29 @@ function MeetingRoom({
           ...(fileOwner === id && attachment ? { isFileOwner: true, attachment } : {}),
           images,
         },
+        (delta) => { typingTarget.current += delta },
       )
-      const msg: ChatMsg = { role: id, text: reply }
+      await typeOut(full, id)
+      const msg: ChatMsg = { role: id, text: normalizePunct(full) }
       if (fileOwner === id && attachment) msg.attachments = [attachment]
+      localMsgs.push(msg)
       setMessages((m) => [...m, msg])
-      await new Promise((r) => setTimeout(r, 350))
+      setTyping(null)
     }
     setRespondingId(null)
     setBusy(false)
+
+    // 轮次上限：插入 host 问询，请发起人给建议
+    if (discussionRound.current >= maxRounds && speakers.length > 0) {
+      localMsgs.push({ role: 'host' as const, text: `以上讨论已进行 ${discussionRound.current} 轮。发起人，您希望我们继续深入某个方向，还是收敛成执行方案？说「继续」可再聊 ${maxRounds} 轮。` })
+      setMessages((m) => [...m, {
+        role: 'host' as const,
+        text: `以上讨论已进行 ${discussionRound.current} 轮。发起人，您希望我们继续深入某个方向，还是收敛成执行方案？说「继续」可再聊 ${maxRounds} 轮。`,
+      }])
+    }
+
+    // 异步刷新看板（结构化拆解），不阻塞发言
+    buildBoard(localMsgs, { topic, purpose, thread: localMsgs }, nameOf).then(setBoard).catch(() => {})
   }
 
   /** 用户发言 → 点名则仅该人说，未点名则全员依次发言 */
@@ -471,12 +536,9 @@ function MeetingRoom({
     const next: ChatMsg[] = [...messages, { role: 'user' as const, text }]
     setMessages(next)
     setDraft('')
-    const named = invited.filter((id) => nameOf(id) && text.includes(nameOf(id)))
-    const broadcast = /(大家|所有人|全部|各位|各自|分别|一起|全体|都(来|说|发|表|讲|聊聊|谈谈|说说)|依次|轮到|每人|逐个|挨个|分头|各抒己见|群策群力|都发言|一起说|都来讲|都来聊)/.test(text)
-    const isDefaultAll = named.length === 0 && !broadcast
-    if (isDefaultAll) setNotice('（未点名具体人员，全员依次发言）')
+    // 轮次控制：用户说「继续/深入/接着」重置轮次上限，否则累加（在 runResponses 内处理）
+    if (/(继续|深入|接着|再聊|展开|多说|详细|具体说|再说)/.test(text)) discussionRound.current = 0
     await runResponses(next, [])
-    if (isDefaultAll) setNotice('')
     maybeDoubaoAppear()
   }
 
@@ -764,6 +826,10 @@ function MeetingRoom({
                 <input className="mr-input" type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.target.value)} />
               </div>
               <div className="mr-field">
+                <label><SvgIcon id="i-steps" size={12} /> 自由讨论最多轮数（到点请发起人给建议）</label>
+                <input className="mr-input" type="number" min={1} max={6} value={maxRounds} onChange={(e) => setMaxRounds(Math.max(1, Math.min(6, Number(e.target.value) || 3)))} />
+              </div>
+              <div className="mr-field">
                 <label><SvgIcon id="i-compass" size={12} /> 目的 / 想解决什么</label>
                 <textarea className="mr-textarea" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="例如：验证概念可行性，并产出可执行的上市方案" rows={3} />
               </div>
@@ -852,6 +918,13 @@ function MeetingRoom({
                 )}
                 <div className="mr-thread" ref={scrollRef}>
                   {messages.map((m, i) => {
+                    if (m.role === 'host') {
+                      return (
+                        <div key={i} className="mr-msg host">
+                          <div className="mr-host-bubble"><SvgIcon id="i-compass" size={12} /> {m.text}</div>
+                        </div>
+                      )
+                    }
                     if (m.role === 'user') {
                       return (
                         <div key={i} className="mr-msg user">
@@ -891,13 +964,29 @@ function MeetingRoom({
                     </div>
                   )}
                   {respondingId && (
-                    <div className="mr-msg">
-                      <span className="mr-avatar" style={{ background: colorHex(respondingId) }}>{nameOf(respondingId)[0]}</span>
+                    typing ? (
+                      <div className="mr-msg">
+                        <span className="mr-avatar" style={{ background: typing.color }}>{nameOf(typing.id)[0]}</span>
                         <div className="mr-bubble">
-                          <span className="mr-msg-name">{nameOf(respondingId)} 正在发言…</span>
-                          <div className="mr-typing"><span /><span /><span /></div>
+                          <span className="mr-msg-name">{nameOf(typing.id)}</span>
+                          {splitParas(typing.text).map((para, idx) => (
+                            <p key={idx}>
+                              {para}
+                              {idx === splitParas(typing.text).length - 1 && <span className="mr-cursor" />}
+                            </p>
+                          ))}
+                          {typing.text.length === 0 && <span className="mr-cursor" />}
                         </div>
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="mr-msg">
+                        <span className="mr-avatar" style={{ background: colorHex(respondingId) }}>{nameOf(respondingId)[0]}</span>
+                          <div className="mr-bubble">
+                            <span className="mr-msg-name">{nameOf(respondingId)} 正在思考…</span>
+                            <div className="mr-typing"><span /><span /><span /></div>
+                          </div>
+                      </div>
+                    )
                   )}
                 </div>
                 <div className="mr-compose-wrap">
@@ -937,8 +1026,8 @@ function MeetingRoom({
                 <MeetingSummaryPanel
                   topic={topic}
                   purpose={purpose}
-                  messages={messages}
                   invited={invited}
+                  board={board}
                   onMakePlan={makePlan}
                   planBuilding={planBuilding}
                   canMakePlan={messages.length > 0 && !busy}
@@ -1043,7 +1132,7 @@ function MeetingRoom({
                 <p className="mr-done-tip">分派后，每人按阶段实时推进并产出真实交付物；点开任务看进度与阶段成果，已交付的可直接下载。也可在左侧栏「项目」随时查看。</p>
               </div>
               <div className="mr-col mr-col-right">
-                <MeetingSummaryPanel topic={topic} purpose={purpose} messages={messages} invited={invited} />
+                <MeetingSummaryPanel topic={topic} purpose={purpose} invited={invited} board={board} />
                 <div className="mr-sum-title">任务进度</div>
                 <div className="mr-sum-tasks">
                   {project.tasks.map((t) => (

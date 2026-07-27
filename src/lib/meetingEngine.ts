@@ -2,7 +2,7 @@
  *  统一策略：LLM 优先（BYOK），任何失败/无密钥都回退到规则引擎。
  *  保证「当下无密钥也能跑通完整产品」，接入密钥后自动升级为真实生成。
  */
-import { chatOnce } from '@/lib/llm'
+import { chatOnce, streamChat } from '@/lib/llm'
 import { kbOf, describeSources, composeSystemPrompt, isGuest } from '@/lib/employeeKB'
 import { memoryToText } from '@/lib/employeeMemory'
 import { isLLMEnabled } from '@/store/workspaceStore'
@@ -187,11 +187,11 @@ export async function buildReply(
     try {
       const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。
 
-【输出格式规则】
-1. 用第一人称、口语化，不要寒暄标题，直接说观点。
-2. 如果内容超过 2 句话，或包含多个并列要点，请分成多段，段与段之间空一行。
-3. 遇到步骤、维度、风险、建议、优劣势等并列信息时，优先使用 "1. / 2. / 3." 或 "- " 列表输出，而不是挤成一段。
-4. 每条要点控制在 1-2 行内，整体保持 2-5 个要点/段落，避免大段连续文字。`
+【发言长度与格式规则】
+1. 长度自适应：除非论证确实需要，否则用 1-3 句话点到即止；可长可短，说到关键要点即可，不要每次都长篇大论。
+2. 第一人称、口语化，直接说观点，不要寒暄标题。
+3. 若内容超过 2 句或含多个并列要点，请分段（段与段之间空一行）；步骤、维度、风险、建议、优劣势等优先用 "1. / 2. / 3." 或 "- " 列表。
+4. 中文排版：使用中文全角标点（，。：；！？）与中文引号“”；中英文、数字之间加半角空格；产品英文名用中文双引号包裹，如“easy clean stroker”。`
       const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
       const out = await chatOnce(sys, user, { temperature: 0.8, images: images ?? undefined })
       if (out && out.trim().length > 0) return out.trim()
@@ -506,4 +506,166 @@ export async function buildStageOutputLLM(
   } catch {
     return null
   }
+}
+
+/* ───────── 标点 / 排版规范化（中文） ───────── */
+/** 把 LLM 输出的英文直引号转中文弯引号、中英文/数字间补半角空格、中文全角标点兜底。 */
+export function normalizePunct(text: string): string {
+  let s = text
+  let inQ = false
+  s = s.replace(/"/g, () => { inQ = !inQ; return inQ ? '“' : '”' })
+  let inS = false
+  s = s.replace(/'/g, () => { inS = !inS; return inS ? '‘' : '’' })
+  s = s.replace(/([A-Za-z0-9$%])(?=[\u4e00-\u9fff])/g, '$1 ')
+  s = s.replace(/([\u4e00-\u9fff])(?=[A-Za-z0-9$%])/g, '$1 ')
+  s = s.replace(/[ \t]+/g, ' ')
+  s = s.replace(/\s+([，。：；！？、])/g, '$1')
+  return s.trim()
+}
+
+/* ───────── 看板洞察：把讨论拆成 事实 / 观点 / 行动指向 / 风险 ───────── */
+export interface BoardInsight {
+  facts: string[]
+  views: string[]
+  actions: string[]
+  risks: string[]
+}
+
+/** 规则兜底：按关键词把最近发言粗分为四类 */
+function ruleBoard(messages: ChatMsg[], ctx: MeetingContext, nameOf: (id: string) => string): BoardInsight {
+  const out: BoardInsight = { facts: [], views: [], actions: [], risks: [] }
+  const push = (arr: string[], who: string, txt: string) => {
+    const t = txt.replace(/\n+/g, ' ').trim()
+    if (t) arr.push(`${who}：${t.slice(0, 70)}`)
+  }
+  for (const m of messages) {
+    const who = m.role === 'user' ? '发起人' : nameOf(m.role)
+    const t = (m.text || '').toLowerCase()
+    if (/(数据|显示|占比|万|元|%|条|调研|原文|报告|统计|销量|评分)/.test(t)) push(out.facts, who, m.text || '')
+    if (/(建议|应该|我认为|觉得|主张|倾向|可能|希望|需要|要)/.test(t)) push(out.views, who, m.text || '')
+    if (/(下一步|可以|做|执行|分工|落地|行动|安排|负责|推进|计划)/.test(t)) push(out.actions, who, m.text || '')
+    if (/(风险|不确定|存疑|担心|缺口|疑问|待确认|但是|不过|问题|隐患)/.test(t)) push(out.risks, who, m.text || '')
+  }
+  return out
+}
+
+/** 把讨论记录结构化拆解为四类，便于人快速浏览并汇总成报告；LLM 优先，失败回退规则 */
+export async function buildBoard(
+  messages: ChatMsg[],
+  ctx: MeetingContext,
+  nameOf: (id: string) => string,
+): Promise<BoardInsight> {
+  const recent = messages.filter((m) => m.text && m.text.trim()).slice(-16)
+  if (isLLMEnabled() && recent.length > 0) {
+    try {
+      const sys = `你是一名会议洞察分析师。请阅读圆桌讨论记录，结构化拆解为四类，方便人快速浏览、并便于后续汇总成报告。
+要求：
+- facts（事实）：可核实的客观信息，如数据、用户原话引用、已确定的结论。每条可溯源。
+- views（观点）：各参会者的判断、看法、主张、建议。
+- actions（行动指向）：讨论中浮现的下一步可落地动作、待办、分工倾向。
+- risks（风险/待确认）：存疑点、数据缺口、需发起人拍板或补充的事项。
+只输出 JSON，格式：{"facts":[...],"views":[...],"actions":[...],"risks":[...]}。每条不超过 40 字。不要解释、不要多余字段。`
+      const thread = recent.map((m) => `${m.role === 'user' ? '发起人' : nameOf(m.role)}：${m.text!.replace(/\n+/g, ' ').trim()}`).join('\n')
+      const user = `主题：${ctx.topic}\n目的：${ctx.purpose}\n\n讨论记录：\n${thread}\n\n请输出结构化 JSON：`
+      const out = await chatOnce(sys, user, { temperature: 0.3 })
+      const m = out.match(/\{[\s\S]*\}/)
+      if (m) {
+        try {
+          const j = JSON.parse(m[0])
+          return {
+            facts: Array.isArray(j.facts) ? j.facts.map(String) : [],
+            views: Array.isArray(j.views) ? j.views.map(String) : [],
+            actions: Array.isArray(j.actions) ? j.actions.map(String) : [],
+            risks: Array.isArray(j.risks) ? j.risks.map(String) : [],
+          }
+        } catch { /* 解析失败回退规则 */ }
+      }
+    } catch { /* LLM 失败回退规则 */ }
+  }
+  return ruleBoard(recent, ctx, nameOf)
+}
+
+/* ───────── 自由讨论编排：按相关性挑 1-3 人发言 ───────── */
+/** 决定自由讨论模式下「谁该发言」：点名优先；否则 LLM 按相关性选 1-3 人，规则回退取 top2。 */
+export async function planSpeakers(
+  text: string,
+  thread: ChatMsg[],
+  invited: string[],
+  nameOf: (id: string) => string,
+  topic: string,
+  purpose: string,
+): Promise<string[]> {
+  const t = text || ''
+  const named = invited.filter((id) => nameOf(id) && t.includes(nameOf(id)))
+  if (named.length > 0) return named
+  if (isLLMEnabled()) {
+    try {
+      const sys = `你是会议 facilitator。判断接下来谁最该发言：基于最新发言与主题，挑出 1-3 位相关性最高的参会者（不要人人都讲）。
+只输出 JSON：{"speakers":["id1","id2"]}。不要解释。`
+      const tail = thread.slice(-6).map((m) => `${m.role === 'user' ? '发起人' : nameOf(m.role)}：${(m.text || '').replace(/\n+/g, ' ').trim()}`).join('\n')
+      const user = `主题：${topic}\n目的：${purpose}\n最新发言：${t}\n近期：\n${tail}\n参会者（id:名字）：${invited.map((id) => id + ':' + nameOf(id)).join('、')}\n输出最该发言的 1-3 人 id：`
+      const out = await chatOnce(sys, user, { temperature: 0.3 })
+      const m = out.match(/\{[\s\S]*\}/)
+      if (m) {
+        try {
+          const j = JSON.parse(m[0])
+          const sp = (Array.isArray(j.speakers) ? j.speakers : []).filter((id: unknown) => typeof id === 'string' && invited.includes(id))
+          if (sp.length > 0) return sp.slice(0, 3)
+        } catch { /* 解析失败回退规则 */ }
+      }
+    } catch { /* LLM 失败回退规则 */ }
+  }
+  // 规则回退：按「与最新发言/主题的命中」打分取 top2
+  const tp = (topic + ' ' + purpose + ' ' + t).toLowerCase()
+  return invited
+    .map((id) => {
+      const kb = kbOf(id)
+      const roleHit = kb.role.toLowerCase().split(/[，,。/\s]/)[0].slice(0, 4)
+      const hit = tp.includes(roleHit) ? 2 : 0
+      const srcHit = kb.dataSources.length > 0 ? 1 : 0
+      return { id, score: hit + srcHit }
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+    .map((x) => x.id)
+}
+
+/* ───────── 流式发言（打字机数据源） ───────── */
+/** 流式生成某员工的发言：有密钥走 SSE 边生成边回调 onDelta；无密钥回退规则（一次性 onDelta）。返回完整文本。 */
+export async function streamReply(
+  id: string,
+  ctx: MeetingContext,
+  nameOf: (id: string) => string,
+  opts?: BuildReplyOptions,
+  onDelta?: (delta: string) => void,
+): Promise<string> {
+  const kb = kbOf(id)
+  const userMsgs = ctx.thread.filter((m) => m.role === 'user')
+  const latest = userMsgs[userMsgs.length - 1]?.text ?? ctx.purpose
+  const att = opts?.isFileOwner && opts?.attachment ? opts.attachment : null
+  const images = opts?.images && opts.images.length > 0 ? opts.images : null
+  const fileNote = att
+    ? `\n\n【注意：本次回复会附带一个可下载文件「${att.name}」。你在发言里必须说明这份文件按什么维度筛选/总结、并提醒用户点击文件下载；禁止再说"我没法发文件"或让用户去其他页面手动导出。】`
+    : ''
+  const imageNote = images
+    ? `\n\n【重要：发起人最新消息附带了 ${images.length} 张图片，你已能"看见"这些图片内容。请结合图片里的信息给出看法，而不要假装没看到图。】`
+    : ''
+
+  if (isLLMEnabled()) {
+    try {
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。
+
+【发言长度与格式规则】
+1. 长度自适应：除非论证确实需要，否则用 1-3 句话点到即止；可长可短，说到关键要点即可，不要每次都长篇大论。
+2. 第一人称、口语化，直接说观点，不要寒暄标题。
+3. 若内容超过 2 句或含多个并列要点，请分段（段与段之间空一行）；步骤、维度、风险、建议、优劣势等优先用 "1. / 2. / 3." 或 "- " 列表。
+4. 中文排版：使用中文全角标点（，。：；！？）与中文引号“”；中英文、数字之间加半角空格；产品英文名用中文双引号包裹，如“easy clean stroker”。`
+      const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
+      const full = await streamChat(sys, user, (d) => onDelta?.(d), { temperature: 0.8, images: images ?? undefined })
+      if (full && full.trim().length > 0) return full.trim()
+    } catch { /* 回退规则 */ }
+  }
+  const rule = ruleReply(id, ctx, latest, opts)
+  onDelta?.(rule)
+  return rule
 }
