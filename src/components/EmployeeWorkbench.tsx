@@ -36,8 +36,67 @@ const SENTIMENT_COLOR: Record<string, string> = {
   负面: '#ff6b9d',
 }
 
-type ChatLine = { role: 'user' | 'emp'; text: string }
+type ChatLine = { role: 'user' | 'emp'; text: string; images?: string[]; file?: UserFile; job?: TagJob }
 type VocRow = { id: string; text: string; result: VocTagResult }
+type UserFile = { name: string; type: string; size: number; dataUrl?: string; content?: string }
+type TagJob = {
+  id: string
+  fileName: string
+  total: number
+  current: number
+  currentDim: number
+  rows: VocRow[]
+  done: boolean
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+const readFileAsText = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = reject
+    reader.readAsText(file)
+  })
+
+const readFileAsDataURL = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+
+/** 简单 CSV / TSV / 换行文本解析：优先把每行当一条评论；若第一行像表头则尝试找「评论」列。 */
+function parseCommentRows(raw: string): string[] {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+  if (lines.length === 0) return []
+  const first = lines[0]
+  const headerKeywords = ['评论', '内容', 'review', 'content', 'text', '评价', '原文', '用户反馈', 'feedback']
+  const looksHeader = headerKeywords.some((k) => first.toLowerCase().includes(k.toLowerCase()))
+  if (!looksHeader) return lines
+
+  // 尝试按逗号/制表符拆分表头，找文本列
+  const sep = first.includes('\t') ? '\t' : ','
+  const headers = first.split(sep).map((h) => h.trim().replace(/^["']|["']$/g, ''))
+  let colIdx = headers.findIndex((h) => headerKeywords.some((k) => h.toLowerCase().includes(k.toLowerCase())))
+  if (colIdx < 0) colIdx = 0
+  return lines
+    .slice(1)
+    .map((line) => {
+      const cols = line.split(sep).map((c) => c.trim().replace(/^["']|["']$/g, ''))
+      return cols[colIdx] ?? ''
+    })
+    .filter(Boolean)
+}
+
+const isImageFile = (f: File) => /^image\//.test(f.type)
+const isTableFile = (f: File) =>
+  f.type === 'text/csv' || f.type === 'text/tab-separated-values' || f.type === 'text/plain' ||
+  /\.(csv|tsv|txt)$/i.test(f.name)
 
 export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const kb = useMemo(() => kbOf(agentId), [agentId])
@@ -302,7 +361,11 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState('')
   const [busy, setBusy] = useState(false)
+  const [attach, setAttach] = useState<UserFile | null>(null)
+  const [attachPreview, setAttachPreview] = useState<string | null>(null)
+  const [jobs, setJobs] = useState<Record<string, TagJob>>({})
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -312,19 +375,101 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
     return `${kb.name}（规则模式）：我目前没有接入 AI 密钥，只能做基础应答。我的岗位是「${kb.role}」——${kb.purpose}。你可以把相关语料贴给我，或去设置里填入 LLM 密钥后我们再深入聊。`
   }
 
+  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    if (isImageFile(file)) {
+      const dataUrl = await readFileAsDataURL(file)
+      setAttach({ name: file.name, type: file.type, size: file.size, dataUrl })
+      setAttachPreview(dataUrl)
+      return
+    }
+    if (isTableFile(file)) {
+      const text = await readFileAsText(file)
+      setAttach({ name: file.name, type: file.type, size: file.size, content: text })
+      setAttachPreview(null)
+      return
+    }
+    // 其他类型：暂不支持
+    setAttach({ name: file.name, type: file.type, size: file.size })
+    setAttachPreview(null)
+  }
+
+  function clearAttach() {
+    setAttach(null)
+    setAttachPreview(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  async function runBatchTag(fileName: string, rows: string[]) {
+    const jobId = rid()
+    const job: TagJob = { id: jobId, fileName, total: rows.length, current: 0, currentDim: -1, rows: [], done: false }
+    setJobs((prev) => ({ ...prev, [jobId]: job }))
+
+    for (let idx = 0; idx < rows.length; idx++) {
+      const text = rows[idx]
+      setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: idx, currentDim: 0 } }))
+      const result = tagComment(text)
+      for (let d = 0; d < VOC_DIMENSION_NAMES.length; d++) {
+        setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], currentDim: d } }))
+        await sleep(90)
+      }
+      const row: VocRow = { id: rid(), text, result }
+      setJobs((prev) => ({
+        ...prev,
+        [jobId]: { ...prev[jobId], rows: [...prev[jobId].rows, row], currentDim: -1 },
+      }))
+      await sleep(120)
+    }
+
+    setJobs((prev) => ({ ...prev, [jobId]: { ...prev[jobId], current: rows.length, currentDim: -1, done: true } }))
+  }
+
   async function send() {
     const text = input.trim()
-    if (!text || busy) return
-    setInput('')
-    setMsgs((m) => [...m, { role: 'user', text }])
+    if ((!text && !attach) || busy) return
+    const currentAttach = attach
+    clearAttach()
+
+    const userMsg: ChatLine = { role: 'user', text: text || (currentAttach ? `📎 ${currentAttach.name}` : '') }
+    if (currentAttach) userMsg.file = currentAttach
+    setMsgs((m) => [...m, userMsg])
+
+    // ── 表格文件：本地 VOC 批量打标 + 可视化过程 ──
+    if (currentAttach && isTableFileByName(currentAttach.name)) {
+      setBusy(true)
+      try {
+        const raw = currentAttach.content ?? ''
+        const rows = parseCommentRows(raw || text || '')
+        if (rows.length === 0) {
+          setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：我没从文件里读到有效评论行。请检查文件是不是 CSV / TSV / TXT，且每行是一条评论；如果是表格，第一行最好有「评论」或「content」列名。` }])
+        } else {
+          const jobId = rid()
+          setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：收到 ${currentAttach.name}，共 ${rows.length} 条，我现在逐维扫描打标…`, job: { id: jobId, fileName: currentAttach.name, total: rows.length, current: 0, currentDim: -1, rows: [], done: false } }])
+          await runBatchTag(currentAttach.name, rows)
+        }
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
+    // ── 图片：走 LLM 视觉 ──
+    const images = currentAttach?.dataUrl ? [currentAttach.dataUrl] : undefined
+    if (images && !text) {
+      setMsgs((m) => [...m, { role: 'emp', text: `${kb.name}：图片已收到，但我需要你在文字里告诉我你想让我做什么（总结 / 提取观点 / 识别风险 / 描述内容）。` }])
+      return
+    }
+
     setBusy(true)
     setTyping('')
     const system = composeSystemPrompt(agentId, memRef.current)
     try {
-      const full = await streamChat(system, text, (d) => setTyping((t) => t + d))
+      const full = await streamChat(system, text || '请看看这张图并给出你的分析。', (d) => setTyping((t) => t + d), { images })
       setMsgs((m) => [...m, { role: 'emp', text: full }])
     } catch {
-      setMsgs((m) => [...m, { role: 'emp', text: fallbackReply(text) }])
+      setMsgs((m) => [...m, { role: 'emp', text: fallbackReply(text || '图片分析') }])
     } finally {
       setTyping('')
       setBusy(false)
@@ -338,13 +483,24 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
           <div className="wb-chat-empty">
             <div className="wb-chat-empty-avatar"><span>{kb.name.slice(0, 1)}</span></div>
             <p>这是你和 <b>{kb.name}</b> 的 1v1 私聊。在这里可以直接问她岗位问题、让她解释某个标签，或聊某个具体任务。</p>
-            <p className="wb-chat-empty-tip">填入 LLM 密钥后，回复会是流式逐字生成的；未填则走规则应答。</p>
+            <p className="wb-chat-empty-tip">支持上传图片（让 LLM 直接看）或 CSV / TSV / TXT 表格（小灵本地逐行 VOC 打标并展示过程）。</p>
           </div>
         )}
         {msgs.map((m, i) => (
-          <div key={i} className={'wb-bubble ' + (m.role === 'user' ? 'me' : 'emp')}>
-            <div className="wb-bubble-name">{m.role === 'user' ? '我' : kb.name}</div>
-            <div className="wb-bubble-text">{m.text}</div>
+          <div key={i}>
+            <div className={'wb-bubble ' + (m.role === 'user' ? 'me' : 'emp')}>
+              <div className="wb-bubble-name">{m.role === 'user' ? '我' : kb.name}</div>
+              <div className="wb-bubble-text">
+                {m.file && m.file.dataUrl ? (
+                  <img src={m.file.dataUrl} alt={m.file.name} className="wb-chat-img" />
+                ) : null}
+                {m.file && !m.file.dataUrl ? (
+                  <span className="wb-chat-file"><SvgIcon id="i-doc" size={13} /> {m.file.name}</span>
+                ) : null}
+                {m.text ? m.text : null}
+              </div>
+            </div>
+            {m.job && <BatchTagJob jobId={m.job.id} jobs={jobs} setJobs={setJobs} />}
           </div>
         ))}
         {typing && (
@@ -354,10 +510,32 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
           </div>
         )}
       </div>
+
+      {attach && (
+        <div className="wb-attach-bar">
+          {attachPreview ? (
+            <img src={attachPreview} alt="preview" className="wb-attach-thumb" />
+          ) : (
+            <span className="wb-attach-name"><SvgIcon id="i-doc" size={13} /> {attach.name}</span>
+          )}
+          <button className="wb-attach-del" onClick={clearAttach} title="移除"><SvgIcon id="i-close" size={12} /></button>
+        </div>
+      )}
+
       <div className="wb-chat-input">
+        <input
+          type="file"
+          ref={fileInputRef}
+          className="wb-file-input"
+          accept="image/*,.csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
+          onChange={onPickFile}
+        />
+        <button className="wb-btn" onClick={() => fileInputRef.current?.click()} title="上传图片或表格" disabled={busy}>
+          <SvgIcon id="i-doc" size={15} />
+        </button>
         <textarea
           className="wb-textarea"
-          placeholder={`和 ${kb.name} 说点什么…（Enter 发送，Shift+Enter 换行）`}
+          placeholder={`和 ${kb.name} 说点什么…（Enter 发送，Shift+Enter 换行；可传图片/CSV/TXT）`}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -365,7 +543,79 @@ function PrivateChat({ agentId, memRef }: { agentId: string; memRef: React.Mutab
           }}
           disabled={busy}
         />
-        <button className="wb-btn primary" onClick={send} disabled={busy || !input.trim()}>发送</button>
+        <button className="wb-btn primary" onClick={send} disabled={busy || (!input.trim() && !attach)}>发送</button>
+      </div>
+    </div>
+  )
+}
+
+const isTableFileByName = (name: string) => /\.(csv|tsv|txt)$/i.test(name)
+
+/* ----------------------------- 批量打标任务可视化 ----------------------------- */
+function BatchTagJob({ jobId, jobs, setJobs }: { jobId: string; jobs: Record<string, TagJob>; setJobs: React.Dispatch<React.SetStateAction<Record<string, TagJob>>> }) {
+  const job = jobs[jobId]
+  if (!job) return null
+  const senti = { 正面: 0, 中性: 0, 负面: 0 } as Record<string, number>
+  job.rows.forEach((r) => { senti[r.result.sentiment] = (senti[r.result.sentiment] ?? 0) + 1 })
+
+  return (
+    <div className="wb-job">
+      <div className="wb-job-head">
+        <div className="wb-job-title"><SvgIcon id="w-tag" size={13} /> 批量 VOC 打标：{job.fileName}</div>
+        <div className="wb-job-meta">{job.done ? `已完成 ${job.total} 条` : `处理中 ${job.current + (job.currentDim >= 0 ? 1 : 0)} / ${job.total} 条`}</div>
+      </div>
+
+      {!job.done && (
+        <div className="wb-job-scan">
+          <div className="wb-job-progress"><div className="wb-job-progress-bar" style={{ width: `${Math.min(100, (job.current / Math.max(1, job.total)) * 100)}%` }} /></div>
+          <div className="wb-scan" style={{ marginBottom: 0 }}>
+            {VOC_DIMENSION_NAMES.map((d, i) => (
+              <span key={d} className={'wb-scan-dim' + (job.currentDim === i ? ' scanning' : '')}>{d}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="wb-job-summary">
+        <span className="wb-sum-pill">已标注 <b>{job.rows.length}</b> / {job.total} 条</span>
+        <span className="wb-sum-pill" style={{ color: SENTIMENT_COLOR['正面'] }}>正面 {senti['正面']}</span>
+        <span className="wb-sum-pill" style={{ color: SENTIMENT_COLOR['中性'] }}>中性 {senti['中性']}</span>
+        <span className="wb-sum-pill" style={{ color: SENTIMENT_COLOR['负面'] }}>负面 {senti['负面']}</span>
+      </div>
+
+      <div className="wb-table-wrap" style={{ maxHeight: 260 }}>
+        <table className="wb-table">
+          <thead>
+            <tr>
+              <th style={{ width: '34%' }}>评论原文</th>
+              <th>9 维标签</th>
+              <th style={{ width: '64px' }}>情感</th>
+            </tr>
+          </thead>
+          <tbody>
+            {job.rows.length === 0 && (
+              <tr><td colSpan={3} className="wb-table-empty">等待小灵开始扫描…</td></tr>
+            )}
+            {job.rows.map((r) => (
+              <tr key={r.id}>
+                <td className="wb-td-text" title={r.text}>{r.text.length > 40 ? r.text.slice(0, 40) + '…' : r.text}</td>
+                <td>
+                  <div className="wb-td-tags">
+                    {r.result.dims.length === 0
+                      ? <span className="wb-td-none">未命中维度</span>
+                      : r.result.dims.map((d) => (
+                        <span key={d.dim} className="wb-td-dim">
+                          <span className="wb-td-dim-name">{d.dim}</span>
+                          {d.tags.map((t) => <span key={t} className="wb-td-tag">{t}</span>)}
+                        </span>
+                      ))}
+                  </div>
+                </td>
+                <td><span className="wb-senti" style={{ background: SENTIMENT_COLOR[r.result.sentiment] }}>{r.result.sentiment}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )
