@@ -109,14 +109,35 @@ const isTableFile = (f: File) =>
 
 const isTableFileByName = (name: string) => /\.(csv|tsv|txt)$/i.test(name)
 
+/** 把常见中文数字（一~九十九）转成阿拉伯数字；阿拉伯数字串直接返回 */
+function parseChineseNumber(s: string): number | null {
+  if (!s) return null
+  if (/^\d+$/.test(s)) return parseInt(s, 10)
+  const map: Record<string, number> = {
+    一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+  }
+  if (s === '十') return 10
+  if (s.startsWith('十')) return 10 + (map[s.slice(1)] ?? 0)
+  if (s.endsWith('十')) return (map[s.slice(0, -1)] ?? 0) * 10
+  if (s.includes('十')) {
+    const [a, b] = s.split('十')
+    return (map[a] ?? 0) * 10 + (map[b] ?? 0)
+  }
+  if (map[s] !== undefined) return map[s]
+  return null
+}
+
 /** 从用户文字指令里提取批量打标配置（条数 / 维度 / 情感过滤） */
 function parseTagInstruction(text: string): TagConfig {
   const cfg: TagConfig = { instruction: text.trim() || undefined }
   if (!text) return cfg
 
-  // 数量：「前50条」「只打100条」「最多200条」「打前 30 条」
-  const limitMatch = text.match(/(?:前|只打|最多|打前|处理前|限制|限量)\s*(\d+)\s*条/)
-  if (limitMatch) cfg.limit = parseInt(limitMatch[1], 10)
+  // 数量：「前50条」「前十行」「只打100个」「最多200」「打前 30 条」
+  const limitMatch = text.match(/(?:前|只打|最多|打前|处理前|限制|限量)\s*(\d+|[一二三四五六七八九十]+)\s*(?:条|行|个)?/)
+  if (limitMatch) {
+    const n = parseChineseNumber(limitMatch[1])
+    if (n != null && n > 0) cfg.limit = n
+  }
 
   // 维度：「只打情感和场景」「关注用户画像和动机」
   const dimMap: Record<string, string> = {
