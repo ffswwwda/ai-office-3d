@@ -359,6 +359,10 @@ export function OfficeCanvas() {
                 <div className="ac-section">
                   <div className="ac-section-title"><SvgIcon id="i-doc" size={12}/> 报告与入口</div>
                   <div className="ac-report-item"><SvgIcon id="i-bar" size={12}/> {profile.reports}</div>
+                  <button type="button" className="ac-workbench-btn"
+                    onClick={() => window.dispatchEvent(new CustomEvent('office:open-workbench', { detail: { agentId: menu.agent.id } }))}>
+                    <SvgIcon id="i-box" size={14}/> 进入 {menu.agent.name} 的工作台
+                  </button>
                 </div>
                 <div className="ac-section">
                   <div className="ac-section-title"><SvgIcon id="i-bot" size={12}/> 数字员工招募</div>

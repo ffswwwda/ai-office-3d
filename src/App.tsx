@@ -4,6 +4,7 @@ import { OfficeCanvas } from '@/components/OfficeCanvas'
 import { OfficeBottomToolbar, OfficeHeaderStats, OfficeProjectsModal, OfficeRightPanel, OfficeSidebar } from '@/components/OfficeDashboardChrome'
 import { OfficeMeetingRoom } from '@/components/OfficeMeetingRoom'
 import { OfficePlantModal } from '@/components/OfficePlantModal'
+import { EmployeeWorkbench } from '@/components/EmployeeWorkbench'
 import type { ChatMsg } from '@/lib/meetingEngine'
 import './App.css'
 
@@ -21,6 +22,7 @@ function App() {
     step?: 'setup' | 'discuss' | 'plan' | 'done'
   } | undefined>(undefined)
   const [plantModal, setPlantModal] = useState<{ open: boolean; text: string }>({ open: false, text: '' })
+  const [workbenchId, setWorkbenchId] = useState<string | null>(null)
 
   const handleNavChange = (label: string) => {
     setActiveNav(label)
@@ -91,6 +93,16 @@ function App() {
     return () => window.removeEventListener('office:restore-meeting', restore)
   }, [])
 
+  // 点击员工「进入工作台」→ 打开数字员工工作台覆盖层
+  useEffect(() => {
+    const open = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { agentId?: string }
+      if (detail?.agentId) setWorkbenchId(detail.agentId)
+    }
+    window.addEventListener('office:open-workbench', open)
+    return () => window.removeEventListener('office:open-workbench', open)
+  }, [])
+
   return (
     <div className="office-app">
       <OfficeSidebar onAgentClick={handleAgentClick} activeNav={activeNav} onNavChange={handleNavChange} />
@@ -116,6 +128,10 @@ function App() {
       )}
       {plantModal.open && createPortal(
         <OfficePlantModal text={plantModal.text} onClose={() => setPlantModal({ ...plantModal, open: false })} />,
+        document.body,
+      )}
+      {workbenchId && createPortal(
+        <EmployeeWorkbench agentId={workbenchId} onClose={() => setWorkbenchId(null)} />,
         document.body,
       )}
     </div>
