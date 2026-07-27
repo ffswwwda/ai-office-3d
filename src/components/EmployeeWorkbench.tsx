@@ -561,6 +561,7 @@ function PrivateChat({
     if ((!text && !attach) || busy) return
     const currentAttach = attach
     clearAttach()
+    setInput('')
 
     const userMsg: ChatLine = { role: 'user', text: text || (currentAttach ? `📎 ${currentAttach.name}` : '') }
     if (currentAttach) userMsg.file = currentAttach
