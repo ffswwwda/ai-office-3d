@@ -32,6 +32,8 @@ export interface BuildReplyOptions {
   attachment?: ChatAttachment
   /** 发起人最新消息携带的图片 data URL，传入后视觉模型可"看见"图片 */
   images?: string[]
+  /** 默认回应最后一条用户消息；设为 true 则回应 thread 的最后一条消息（用于员工互相接话） */
+  replyToLast?: boolean
 }
 
 /** 把会话线程压缩成给 LLM 的上下文文本 */
@@ -173,7 +175,9 @@ export async function buildReply(
 ): Promise<string> {
   const kb = kbOf(id)
   const userMsgs = ctx.thread.filter((m) => m.role === 'user')
-  const latest = userMsgs[userMsgs.length - 1]?.text ?? ctx.purpose
+  const latest = opts?.replyToLast
+    ? ctx.thread.slice(-1)[0]?.text ?? ctx.purpose
+    : userMsgs[userMsgs.length - 1]?.text ?? ctx.purpose
   const att = opts?.isFileOwner && opts?.attachment ? opts.attachment : null
   const images = opts?.images && opts.images.length > 0 ? opts.images : null
   const fileNote = att
@@ -182,17 +186,21 @@ export async function buildReply(
   const imageNote = images
     ? `\n\n【重要：发起人最新消息附带了 ${images.length} 张图片，你已能"看见"这些图片内容。请结合图片里的信息（如图表、截图、数据、设计稿等）给出看法，而不要假装没看到图。】`
     : ''
+  const replyHint = opts?.replyToLast
+    ? '（上一条是其他同事的发言，请直接接话、回应、追问或补充；如果同事实名点你，优先回答他的问题。）'
+    : '（上一条是发起人的最新发言。）'
 
   if (isLLMEnabled()) {
     try {
-      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对当前需要回应的发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。
 
 【发言长度与格式规则】
 1. 长度自适应：除非论证确实需要，否则用 1-3 句话点到即止；可长可短，说到关键要点即可，不要每次都长篇大论。
 2. 第一人称、口语化，直接说观点，不要寒暄标题。
 3. 若内容超过 2 句或含多个并列要点，请分段（段与段之间空一行）；步骤、维度、风险、建议、优劣势等优先用 "1. / 2. / 3." 或 "- " 列表。
-4. 中文排版：使用中文全角标点（，。：；！？）与中文引号“”；中英文、数字之间加半角空格；产品英文名用中文双引号包裹，如“easy clean stroker”。`
-      const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
+4. 中文排版：使用中文全角标点（，。：；！？）与中文引号“”；中英文、数字之间加半角空格；产品英文名用中文双引号包裹，如“easy clean stroker”。
+5. 禁止输出 Markdown 格式标记（如 **、*、反引号、~~），直接输出纯文本。`
+      const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n你正在回应：${latest}\n${replyHint}\n\n请给出你的看法：`
       const out = await chatOnce(sys, user, { temperature: 0.8, images: images ?? undefined })
       if (out && out.trim().length > 0) return out.trim()
     } catch { /* 回退规则 */ }
@@ -509,9 +517,21 @@ export async function buildStageOutputLLM(
 }
 
 /* ───────── 标点 / 排版规范化（中文） ───────── */
-/** 把 LLM 输出的英文直引号转中文弯引号、中英文/数字间补半角空格、中文全角标点兜底。 */
+/** 移除聊天输出里不需要的 Markdown 格式标记（**、*、`、~~、链接、标题/引用前缀），保留列表符号与段落结构。 */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')          // 粗体
+    .replace(/\*(.+?)\*/g, '$1')             // 斜体
+    .replace(/`{1,3}([^`]*?)`{1,3}/g, '$1')  // 行内代码 / 代码块去反引号
+    .replace(/^#{1,6}\s+/gm, '')             // 标题标记
+    .replace(/^>\s?/gm, '')                  // 引用标记
+    .replace(/!?\[([^\]]*)\]\([^)]+\)/g, '$1') // Markdown 链接 / 图片
+    .replace(/~~(.+?)~~/g, '$1')             // 删除线
+}
+
+/** 把 LLM 输出的英文直引号转中文弯引号、中英文/数字间补半角空格、中文全角标点兜底，并先清理 Markdown 标记。 */
 export function normalizePunct(text: string): string {
-  let s = text
+  let s = stripMarkdown(text)
   let inQ = false
   s = s.replace(/"/g, () => { inQ = !inQ; return inQ ? '“' : '”' })
   let inS = false
@@ -641,7 +661,9 @@ export async function streamReply(
 ): Promise<string> {
   const kb = kbOf(id)
   const userMsgs = ctx.thread.filter((m) => m.role === 'user')
-  const latest = userMsgs[userMsgs.length - 1]?.text ?? ctx.purpose
+  const latest = opts?.replyToLast
+    ? ctx.thread.slice(-1)[0]?.text ?? ctx.purpose
+    : userMsgs[userMsgs.length - 1]?.text ?? ctx.purpose
   const att = opts?.isFileOwner && opts?.attachment ? opts.attachment : null
   const images = opts?.images && opts.images.length > 0 ? opts.images : null
   const fileNote = att
@@ -650,17 +672,21 @@ export async function streamReply(
   const imageNote = images
     ? `\n\n【重要：发起人最新消息附带了 ${images.length} 张图片，你已能"看见"这些图片内容。请结合图片里的信息给出看法，而不要假装没看到图。】`
     : ''
+  const replyHint = opts?.replyToLast
+    ? '（上一条是其他同事的发言，请直接接话、回应、追问或补充；如果同事实名点你，优先回答他的问题。）'
+    : '（上一条是发起人的最新发言。）'
 
   if (isLLMEnabled()) {
     try {
-      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对发起人的最新发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。
+      const sys = `${composeSystemPrompt(id, memoryToText(id))}\n你现在参加一个多智能体圆桌会议，其他同事和发起人都在场。${fileNote}${imageNote}\n\n【你当前可访问的数据源详情】\n${sourceContext(id)}\n\n请基于你的领域知识，对当前需要回应的发言给出你的专业看法：指出关键风险、补充被忽略的角度、给出可落地的建议。
 
 【发言长度与格式规则】
 1. 长度自适应：除非论证确实需要，否则用 1-3 句话点到即止；可长可短，说到关键要点即可，不要每次都长篇大论。
 2. 第一人称、口语化，直接说观点，不要寒暄标题。
 3. 若内容超过 2 句或含多个并列要点，请分段（段与段之间空一行）；步骤、维度、风险、建议、优劣势等优先用 "1. / 2. / 3." 或 "- " 列表。
-4. 中文排版：使用中文全角标点（，。：；！？）与中文引号“”；中英文、数字之间加半角空格；产品英文名用中文双引号包裹，如“easy clean stroker”。`
-      const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n发起人最新说：${latest}\n\n请给出你的看法：`
+4. 中文排版：使用中文全角标点（，。：；！？）与中文引号“”；中英文、数字之间加半角空格；产品英文名用中文双引号包裹，如“easy clean stroker”。
+5. 禁止输出 Markdown 格式标记（如 **、*、反引号、~~），直接输出纯文本。`
+      const user = `会议主题：${ctx.topic}\n会议目的：${ctx.purpose}\n\n近期讨论：\n${threadToText(ctx.thread, nameOf)}\n\n你正在回应：${latest}\n${replyHint}\n\n请给出你的看法：`
       const full = await streamChat(sys, user, (d) => onDelta?.(d), { temperature: 0.8, images: images ?? undefined })
       if (full && full.trim().length > 0) return full.trim()
     } catch { /* 回退规则 */ }

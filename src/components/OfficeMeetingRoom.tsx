@@ -331,6 +331,8 @@ function MeetingRoom({
   const [board, setBoard] = useState<BoardInsight | null>(null)
   const [maxRounds, setMaxRounds] = useState(3)
   const discussionRound = useRef(0)
+  const agentChainDepth = useRef(0)
+  const MAX_AUTO_CHAIN = 2
   const typingTarget = useRef('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -384,6 +386,7 @@ function MeetingRoom({
     setMessages([{ role: 'user', text: `主题：${topic}\n目的：${purpose}\n会议时间：${meetingDate || '未指定'}` }])
     setDoubaoState('hidden') // 新会议重置访客状态
     discussionRound.current = 0
+    agentChainDepth.current = 0
     setBoard(null)
     setStep('discuss')
   }
@@ -464,22 +467,45 @@ function MeetingRoom({
     }, 16)
   })
 
-  /** 公共：让员工对最新一条用户消息发言。
+  /** 检测一条消息是否点名了某位在场员工（支持「小分」「@小分」）。 */
+  const findNamedByText = (text: string, excludeId?: string): string[] => {
+    return invited.filter((id) => {
+      if (excludeId && id === excludeId) return false
+      const n = nameOf(id)
+      if (!n) return false
+      return text.includes(n) || text.includes('@' + n)
+    })
+  }
+
+  /** 公共：让员工对某条触发消息发言。
+   *  - triggerMsg 未指定时，默认取最后一条用户消息。
    *  - 用户说「轮流/大家说…」→ 全员轮流（round-robin）
    *  - 否则自由讨论：按相关性挑 1-3 人发言（planSpeakers）
-   *  - 累计讨论达 maxRounds 轮后，插入 host 问询请发起人给建议
+   *  - 若触发消息是员工发言且点名了其他员工 → 仅让被点名者接话（实现互相 Q）
+   *  - 用户触发的讨论达 maxRounds 轮后，插入 host 问询请发起人给建议
+   *  - 员工互相点名可自动连续接话，最多 MAX_AUTO_CHAIN 次
    *  - 打字机流式输出
    */
-  const runResponses = async (thread: ChatMsg[], images: string[]) => {
-    const lastUser = thread.filter((m) => m.role === 'user').slice(-1)[0]
-    const text = lastUser?.text ?? purpose
-    const roundRobin = /(轮流|依次|每人|逐个|挨个|都发言|轮到|各说一句|分别说|依次说|大家轮流|所有人轮流|都来讲|都来聊|都来说|大家说|大家|所有人|各位|一起说|全体|分别|各自|各抒己见|群策群力)/.test(text)
-    const speakers = roundRobin
-      ? resolveSpeakers(text, invited, nameOf)
-      : await planSpeakers(text, thread, invited, nameOf, topic, purpose)
+  const runResponses = async (thread: ChatMsg[], images: string[], triggerMsg?: ChatMsg, chainDepth = 0) => {
+    const trigger = triggerMsg ?? thread.filter((m) => m.role === 'user').slice(-1)[0]
+    const text = trigger?.text ?? purpose
+    const isUserTrigger = trigger?.role === 'user'
 
-    // 检测是否要文件：指定人优先，否则找第一个有数据能力的非访客员工
-    const wantsFile = detectFileRequest(text)
+    // 选人逻辑
+    let speakers: string[] = []
+    if (!isUserTrigger && trigger) {
+      // 员工点名接话：优先让被点名的人发言
+      speakers = findNamedByText(text, trigger.role)
+    }
+    if (speakers.length === 0 && isUserTrigger) {
+      const roundRobin = /(轮流|依次|每人|逐个|挨个|都发言|轮到|各说一句|分别说|依次说|大家轮流|所有人轮流|都来讲|都来聊|都来说|大家说|大家|所有人|各位|一起说|全体|分别|各自|各抒己见|群策群力)/.test(text)
+      speakers = roundRobin
+        ? resolveSpeakers(text, invited, nameOf)
+        : await planSpeakers(text, thread, invited, nameOf, topic, purpose)
+    }
+
+    // 检测是否要文件：仅用户触发时处理；指定人优先，否则找第一个有数据能力的非访客员工
+    const wantsFile = isUserTrigger && detectFileRequest(text)
     let fileOwner: string | null = null
     let attachment: ChatAttachment | null = null
     if (wantsFile) {
@@ -492,7 +518,7 @@ function MeetingRoom({
 
     const localMsgs: ChatMsg[] = [...thread]
     setBusy(true)
-    discussionRound.current += 1
+    if (isUserTrigger) discussionRound.current += 1
     for (const id of speakers) {
       setRespondingId(id)
       typingTarget.current = ''
@@ -503,6 +529,7 @@ function MeetingRoom({
         {
           ...(fileOwner === id && attachment ? { isFileOwner: true, attachment } : {}),
           images,
+          replyToLast: !isUserTrigger,
         },
         (delta) => { typingTarget.current += delta },
       )
@@ -516,8 +543,8 @@ function MeetingRoom({
     setRespondingId(null)
     setBusy(false)
 
-    // 轮次上限：插入 host 问询，请发起人给建议
-    if (discussionRound.current >= maxRounds && speakers.length > 0) {
+    // 用户触发的轮次上限：插入 host 问询
+    if (isUserTrigger && discussionRound.current >= maxRounds && speakers.length > 0) {
       localMsgs.push({ role: 'host' as const, text: `以上讨论已进行 ${discussionRound.current} 轮。发起人，您希望我们继续深入某个方向，还是收敛成执行方案？说「继续」可再聊 ${maxRounds} 轮。` })
       setMessages((m) => [...m, {
         role: 'host' as const,
@@ -527,6 +554,16 @@ function MeetingRoom({
 
     // 异步刷新看板（结构化拆解），不阻塞发言
     buildBoard(localMsgs, { topic, purpose, thread: localMsgs }, nameOf).then(setBoard).catch(() => {})
+
+    // 自动接话：如果最后一条员工发言点名了其他员工，让他们继续（员工之间互相 Q）
+    const lastAgentMsg = localMsgs.filter((m) => m.role !== 'user' && m.role !== 'host').slice(-1)[0]
+    if (lastAgentMsg && chainDepth < MAX_AUTO_CHAIN) {
+      const namedNext = findNamedByText(lastAgentMsg.text, lastAgentMsg.role)
+      if (namedNext.length > 0) {
+        agentChainDepth.current = chainDepth + 1
+        await runResponses(localMsgs, [], lastAgentMsg, chainDepth + 1)
+      }
+    }
   }
 
   /** 用户发言 → 点名则仅该人说，未点名则全员依次发言 */
@@ -537,7 +574,10 @@ function MeetingRoom({
     setMessages(next)
     setDraft('')
     // 轮次控制：用户说「继续/深入/接着」重置轮次上限，否则累加（在 runResponses 内处理）
-    if (/(继续|深入|接着|再聊|展开|多说|详细|具体说|再说)/.test(text)) discussionRound.current = 0
+    if (/(继续|深入|接着|再聊|展开|多说|详细|具体说|再说)/.test(text)) {
+      discussionRound.current = 0
+      agentChainDepth.current = 0
+    }
     await runResponses(next, [])
     maybeDoubaoAppear()
   }
