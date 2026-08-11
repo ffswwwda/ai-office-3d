@@ -2151,6 +2151,9 @@ input[type="date"].mr-input { color-scheme: dark; }
 /* ── 私聊 ── */
 .wb-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .wb-chat-scroll { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+/* 消息对齐：用户消息与它触发的 AI 回复视觉成组（紧贴），AI 回复与下一条用户消息之间留正常间距 */
+.wb-msg-row.me { margin-bottom: 2px; }
+.wb-msg-row.emp + .wb-msg-row.me { margin-top: 16px; }
 .wb-chat-empty { text-align: center; color: #9a9ab8; max-width: 440px; margin: 30px auto; }
 .wb-chat-empty-avatar {
   width: 52px; height: 52px; border-radius: 14px; margin: 0 auto 12px; color: #fff; font-size: 22px; font-weight: 800;
@@ -2180,6 +2183,20 @@ input[type="date"].mr-input { color-scheme: dark; }
 .wb-msg-row.me .wb-bubble-text { background: linear-gradient(135deg, rgba(0,212,255,.22), rgba(168,85,247,.22)); color: #f0f0fa; border-bottom-right-radius: 4px; }
 .wb-msg-row.emp .wb-bubble-text { background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1); color: #e4e4f6; border-bottom-left-radius: 4px; }
 .wb-cursor { display: inline-block; width: 7px; height: 14px; vertical-align: -2px; margin-left: 1px; background: var(--wb-accent, #00d4ff); animation: blink 1s steps(2) infinite; }
+
+/* 「正在输入」动画指示器（三跳点） */
+.wb-typing-indicator { display: flex; align-items: center; gap: 3px; color: #9a9ab8; font-size: 12.5px; }
+.wb-typing-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--wb-accent, #00d4ff);
+  animation: wbTypingBounce 1.3s ease-in-out infinite;
+}
+.wb-typing-dot:nth-child(2) { animation-delay: .18s; }
+.wb-typing-dot:nth-child(3) { animation-delay: .36s; }
+@keyframes wbTypingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .35; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
 .wb-chat-input { display: flex; gap: 10px; padding: 12px 18px; border-top: 1px solid rgba(255,255,255,.08); }
 .wb-chat-input .wb-textarea { min-height: 44px; max-height: 96px; }
 
@@ -2227,6 +2244,40 @@ input[type="date"].mr-input { color-scheme: dark; }
   background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12); color: #d8d8f0;
   margin-bottom: 8px;
 }
+
+/* ── 智能体内联数据表格 ── */
+.wb-inline-table {
+  margin: 10px 0 6px; border: 1px solid rgba(0,212,255,.25); border-radius: 11px;
+  background: rgba(0,0,0,.3); overflow: hidden;
+}
+.wb-inline-table-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 13px; background: rgba(0,212,255,.08); cursor: pointer;
+  user-select: none; transition: background .15s;
+}
+.wb-inline-table-head:hover { background: rgba(0,212,255,.14); }
+.wb-inline-table-title {
+  display: flex; align-items: center; gap: 7px; font-size: 12.2px; font-weight: 700;
+  color: #00d4ff;
+}
+.wb-inline-table-desc {
+  font-weight: 400; color: #8e8eae; font-size: 11px; margin-left: 4px;
+}
+.wb-inline-table-meta {
+  font-size: 10.5px; color: #6e6e8a; white-space: nowrap;
+}
+.wb-inline-table-actions {
+  display: flex; gap: 6px; padding: 7px 13px; border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.wb-inline-table-actions .wb-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 6px;
+}
+.wb-inline-table-scroll {
+  max-height: 260px; overflow-y: auto; padding: 0;
+}
+.wb-table-compact { font-size: 11.5px; }
+.wb-table-compact th { padding: 7px 10px; font-size: 10.8px; }
+.wb-table-compact td { padding: 5px 10px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 批量打标任务卡 ── */
 .wb-job {

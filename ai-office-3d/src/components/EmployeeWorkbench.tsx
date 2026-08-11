@@ -37,7 +37,17 @@ const SENTIMENT_COLOR: Record<string, string> = {
   负面: '#ff6b9d',
 }
 
-type ChatLine = { role: 'user' | 'emp'; text: string; images?: string[]; file?: UserFile; job?: TagJob }
+type ChatLine = { role: 'user' | 'emp'; text: string; images?: string[]; file?: UserFile; job?: TagJob; /** 智能体主动拉取的数据表格 */ dataTable?: DataTablePayload }
+
+/** 数据表格载荷：智能体在聊天中发送的结构化数据 */
+interface DataTablePayload {
+  title: string
+  description?: string
+  headers: string[]
+  rows: string[][]
+  sourceId?: string
+  sourceName?: string
+}
 type VocRow = { id: string; text: string; result: VocTagResult }
 type UserFile = { name: string; type: string; size: number; dataUrl?: string; content?: string }
 type TagConfig = {
@@ -169,6 +179,105 @@ function parseTagInstruction(text: string): TagConfig {
   }
 
   return cfg
+}
+
+/* ==================== 主站数据获取能力 ====================
+ *  ai-office-3d 与主站 category-insight-hub 同源（ffswwwda.github.io），
+ *  可直接 fetch 主站上的 JSON/JS 数据文件，零 CORS 问题。
+ */
+
+const MAIN_SITE_BASE = 'https://ffswwwda.github.io/category-insight-hub'
+
+/** 数据源 ID → 主站可获取文件路径映射 */
+const DATA_FILE_MAP: Record<string, { url: string; rowKey?: string; headers?: string[]; description?: string }> = {
+  s8: {
+    url: '/de_records.json',
+    rowKey: 'records',
+    headers: ['ASIN', '标题', '品牌', '星级', '评论数', '价格', '类目'],
+    description: '德国站 248 款在售商品',
+  },
+}
+
+/**
+ * 从主站拉取指定数据源的原始数据，返回 DataTablePayload。
+ * 仅对已注册在 DATA_FILE_MAP 的数据源有效；其余返回 null（提示走看板）。
+ */
+async function fetchSourceData(sourceId: string): Promise<DataTablePayload | null> {
+  const mapping = DATA_FILE_MAP[sourceId]
+  if (!mapping) return null
+
+  try {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 12000)
+    const resp = await fetch(MAIN_SITE_BASE + mapping.url, { signal: ac.signal })
+    clearTimeout(timer)
+    if (!resp.ok) return null
+    const json = await resp.json()
+
+    // 提取行数组
+    let rawRows: unknown[] = []
+    if (mapping.rowKey && Array.isArray((json as Record<string, unknown>)[mapping.rowKey])) {
+      rawRows = (json as Record<string, unknown>)[mapping.rowKey] as unknown[]
+    } else if (Array.isArray(json)) {
+      rawRows = json
+    } else {
+      return null
+    }
+
+    // 取前 50 行避免聊天爆炸，保留 headers
+    const src = DATA_SOURCE_REGISTRY[sourceId]
+    const headers = mapping.headers ?? Object.keys(rawRows[0] as object ?? {}).slice(0, 8)
+    const rows = rawRows.slice(0, 50).map((r) => {
+      const o = r as Record<string, unknown>
+      return headers.map((h) => String(o[h] ?? '').slice(0, 80))
+    })
+
+    return {
+      title: src?.name ?? mapping.description ?? sourceId,
+      description: mapping.description,
+      headers,
+      rows,
+      sourceId,
+      sourceName: src?.name,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** 粗略检测用户是否在要求数据/表格/导出 */
+function isDataRequest(text: string): boolean {
+  return /(导出|发表格|看看.*数据|拉取|获取.*数据|表格|数据源|有哪些.*商品|商品列表|销售数据|评论数据)/i.test(text)
+}
+
+/** 从用户文字中提取可能的数据源 ID（模糊匹配） */
+function guessRequestedSource(text: string, agentSources: string[]): string | null {
+  const lower = text.toLowerCase()
+  // 关键词 → 源 ID 映射
+  const hints: [RegExp, string][] = [
+    [/德国|de[ _]?record|德站/i, 's8'],
+    [/亚马逊评论|amazon.*review|评论.*数据/i, 's1'],
+    [/reddit|社媒/i, 's12'],
+    [/销售.*美亚|美亚.*销售/i, 's23'],
+    [/销售.*日亚|日亚.*销售/i, 's24'],
+    [/销售.*欧亚|欧亚.*销售|德国.*销售|英国.*销售/i, 's25'],
+    [/关键词|搜索量/i, 's14'],
+    [/反馈|售后|客诉/i, 's15'],
+    [/p站|播放/i, 's16'],
+    [/youtube|视频/i, 's17'],
+    [/bedbible|测评文章/i, 's18'],
+    [/供应商|供应链/i, 's19'],
+    [/竞品|kol/i, 's20'],
+    [/品牌账号|社媒监控/i, 's21'],
+  ]
+  for (const [re, sid] of hints) {
+    if (re.test(lower) && agentSources.includes(sid)) return sid
+  }
+  // 未命中关键词时返回该智能体的第一个有文件映射的数据源
+  for (const sid of agentSources) {
+    if (DATA_FILE_MAP[sid]) return sid
+  }
+  return null
 }
 
 export function EmployeeWorkbench({ agentId, onClose }: { agentId: string; onClose: () => void }) {
@@ -548,6 +657,8 @@ function PrivateChat({
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState('')
   const [busy, setBusy] = useState(false)
+  /** busy=true 但 stream 尚未返回文字时，显示「正在输入」动画 */
+  const waitingForStream = busy && !typing
   const [attach, setAttach] = useState<UserFile | null>(null)
   const [attachPreview, setAttachPreview] = useState<string | null>(null)
   const [composing, setComposing] = useState(false)
@@ -671,6 +782,11 @@ function PrivateChat({
 
     setBusy(true)
     setTyping('')
+
+    // ── 检测数据请求：用户要表格/数据时，并行拉取主站数据 ──
+    const requestedSource = isDataRequest(text) ? guessRequestedSource(text, kb.dataSources) : null
+    const dataFetchPromise = requestedSource ? fetchSourceData(requestedSource) : null
+
     const system = composeSystemPrompt(agentId, memRef.current)
     abortCtrlRef.current = new AbortController()
     try {
@@ -680,7 +796,12 @@ function PrivateChat({
         (d) => setTyping((t) => t + d),
         { images, signal: abortCtrlRef.current.signal },
       )
-      setMsgs((m) => [...m, { role: 'emp', text: normalizePunct(full) }])
+      // 等数据拉取完成（如果有的话）
+      let dataTable: DataTablePayload | undefined
+      if (dataFetchPromise) {
+        dataTable = (await dataFetchPromise) ?? undefined
+      }
+      setMsgs((m) => [...m, { role: 'emp', text: normalizePunct(full), ...(dataTable ? { dataTable } : {}) }])
     } catch (err) {
       if ((err as Error)?.name === 'AbortError' || (err as Error)?.message?.includes('aborted')) {
         setMsgs((m) => [...m, { role: 'emp', text: normalizePunct(typing || '（已停止输出）') }])
@@ -737,6 +858,7 @@ function PrivateChat({
                     <span className="wb-chat-file"><SvgIcon id="i-doc" size={13} /> {m.file.name}</span>
                   ) : null}
                   {m.text ? m.text : null}
+                  {m.dataTable ? <InlineDataTable data={m.dataTable} /> : null}
                 </div>
               </div>
             </div>
@@ -750,6 +872,17 @@ function PrivateChat({
             )}
           </div>
         ))}
+        {waitingForStream && (
+          <div className="wb-msg-row emp">
+            <div className="wb-avatar" title={kb.name}>{kb.name.slice(0, 1)}</div>
+            <div className="wb-bubble">
+              <div className="wb-bubble-name">{kb.name}</div>
+              <div className="wb-bubble-text wb-typing-indicator">
+                <span className="wb-typing-dot" />正在输入<span className="wb-typing-dot" /><span className="wb-typing-dot" />
+              </div>
+            </div>
+          </div>
+        )}
         {typing && (
           <div className="wb-msg-row emp">
             <div className="wb-avatar" title={kb.name}>{kb.name.slice(0, 1)}</div>
@@ -804,6 +937,66 @@ function PrivateChat({
           <button className="wb-btn primary" onClick={send} disabled={!canSend}>发送</button>
         )}
       </div>
+    </div>
+  )
+}
+
+/* ----------------------------- 内联数据表格（智能体发送给用户的表格） ----------------------------- */
+function InlineDataTable({ data }: { data: DataTablePayload }) {
+  const [expanded, setExpanded] = useState(true)
+  const [copied, setCopied] = useState(false)
+
+  function copyTable() {
+    const headerLine = data.headers.join('\t')
+    const bodyLines = data.rows.map((r) => r.join('\t'))
+    const text = [headerLine, ...bodyLines].join('\n')
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800) })
+  }
+
+  function downloadCSV() {
+    const csv = [data.headers, ...data.rows].map((row) =>
+      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','),
+    ).join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${data.title}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="wb-inline-table">
+      <div className="wb-inline-table-head" onClick={() => setExpanded(!expanded)}>
+        <span className="wb-inline-table-title">
+          <SvgIcon id="i-bar" size={12} /> {data.title}
+          {data.description ? <span className="wb-inline-table-desc">{data.description}</span> : null}
+        </span>
+        <span className="wb-inline-table-meta">{data.rows.length} 行 · {data.headers.length} 列</span>
+      </div>
+      {expanded && (
+        <>
+          <div className="wb-inline-table-actions">
+            <button className="wb-btn" onClick={copyTable} title="复制表格">
+              <SvgIcon id={copied ? 'i-check' : 'i-doc'} size={11} /> {copied ? '已复制' : '复制'}
+            </button>
+            <button className="wb-btn" onClick={downloadCSV} title="导出 CSV">
+              <SvgIcon id="i-doc" size={11} /> 导出 CSV
+            </button>
+          </div>
+          <div className="wb-inline-table-scroll">
+            <table className="wb-table wb-table-compact">
+              <thead><tr>{data.headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>
+              <tbody>
+                {data.rows.map((r, ri) => (
+                  <tr key={ri}>{r.map((c, ci) => <td key={ci} title={c}>{c}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   )
 }
