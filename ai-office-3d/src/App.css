@@ -2162,18 +2162,30 @@ input[type="date"].mr-input { color-scheme: dark; }
 }
 .wb-chat-empty p { font-size: 12.8px; line-height: 1.65; color: #a4a4c2; margin: 0 0 8px; }
 .wb-chat-empty-tip { font-size: 11.5px; color: #7e7e9c; }
-.wb-msg-row { display: flex; align-items: flex-start; gap: 10px; max-width: 86%; }
-.wb-msg-row.me { align-self: flex-end; flex-direction: row-reverse; }
-.wb-msg-row.emp { align-self: flex-start; }
+/* 消息行：三列网格 [左头像区 | 气泡(1fr) | 右头像区]
+   emp: 头像在左列，气泡在中列 → 气泡左边缘固定
+   me:  气泡在中列，头像在右列 → 气泡左边缘与 emp 完全对齐 */
+.wb-msg-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: flex-start;
+  max-width: 86%;
+}
+.wb-msg-row.emp { align-self: flex-start; grid-template-areas: 'avatar bubble empty'; }
+.wb-msg-row.me  { align-self: flex-end;  grid-template-areas: 'empty bubble avatar'; }
+.wb-msg-row.emp > .wb-avatar { grid-area: avatar; }
+.wb-msg-row.emp > .wb-bubble { grid-area: bubble; }
+.wb-msg-row.me > .wb-bubble  { grid-area: bubble; }
+.wb-msg-row.me > .wb-avatar  { grid-area: avatar; }
 .wb-msg-row .wb-avatar {
-  width: 34px; height: 34px; border-radius: 10px; flex: none;
+  width: 34px; height: 34px; border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
   font-size: 13px; font-weight: 800; color: #fff;
   background: linear-gradient(135deg, #00d4ff, #a855f7 55%, #ff6b9d);
   box-shadow: 0 4px 12px rgba(168,85,247,.28);
 }
 .wb-msg-row.me .wb-avatar { background: linear-gradient(135deg, #34c759, #2d9d5e); box-shadow: 0 4px 12px rgba(52,199,89,.28); }
-.wb-bubble { flex: 1; min-width: 0; }
+.wb-bubble { min-width: 0; }
 .wb-bubble-name { font-size: 10.5px; color: #8e8eae; margin-bottom: 3px; padding: 0 4px; }
 .wb-bubble.me .wb-bubble-name,
 .wb-msg-row.me .wb-bubble-name { text-align: right; }
