@@ -47,6 +47,7 @@ interface DataTablePayload {
   rows: string[][]
   sourceId?: string
   sourceName?: string
+  totalRows?: number
 }
 type VocRow = { id: string; text: string; result: VocTagResult }
 type UserFile = { name: string; type: string; size: number; dataUrl?: string; content?: string }
@@ -183,66 +184,128 @@ function parseTagInstruction(text: string): TagConfig {
 
 /* ==================== 主站数据获取能力 ====================
  *  ai-office-3d 与主站 category-insight-hub 同源（ffswwwda.github.io），
- *  可直接 fetch 主站上的 JSON/JS 数据文件，零 CORS 问题。
+ *  主站数据以内联 JS 变量形式存在于 HTML 中。
+ *  本模块 fetch 主站 HTML → 提取 JS 变量 → 按路径导航 → 截断 → 返回表格。
  */
 
 const MAIN_SITE_BASE = 'https://ffswwwda.github.io/category-insight-hub'
 
-/** 数据源 ID → 主站可获取文件路径映射 */
-const DATA_FILE_MAP: Record<string, { url: string; rowKey?: string; headers?: string[]; description?: string }> = {
+/**
+ * 数据源定义：每个源对应主站的一个 HTML 页面 + 页面内一个 JS 全局变量名 + 可选的嵌套路径。
+ * - 简单源（如 s8）：varName 直接是数组，直接提取
+ * - 复杂源（如 s23/s24/s25）：varName 是对象，需用 nestedPath 导航到目标数组
+ */
+interface SourceDef {
+  page: string
+  varName: string
+  /** 嵌套路径，如 ['boards', '日亚', 'totals', 'jp'] 表示 SALES_DATA.boards["日亚"].totals.jp */
+  nestedPath?: (string | number)[]
+  headers?: string[]
+  description: string
+  maxRows?: number
+}
+
+const SOURCE_DEFS: Record<string, SourceDef> = {
+  // ── 德国商品库（de-dashboard.html 的 DE_RECORDS_FULL 是扁平数组）──
   s8: {
-    url: '/de_records.json',
-    rowKey: 'records',
+    page: '/de-dashboard.html',
+    varName: 'DE_RECORDS_FULL',
     headers: ['ASIN', '标题', '品牌', '星级', '评论数', '价格', '类目'],
     description: '德国站 248 款在售商品',
+    maxRows: 80,
+  },
+  // ── 销售数据（product-sales.html 的 SALES_DATA 是嵌套对象）──
+  s23: {
+    page: '/vendor/product-sales.html',
+    varName: 'SALES_DATA',
+    nestedPath: ['boards', '美亚', 'totals', 'us'],
+    headers: ['ASIN', '品牌', '标题(中文)', '类目', '价格', '月销量', '星级', '评论数', 'FBA', '利润率'],
+    description: '美亚商品销售数据',
+    maxRows: 100,
+  },
+  s24: {
+    page: '/vendor/product-sales.html',
+    varName: 'SALES_DATA',
+    nestedPath: ['boards', '日亚', 'totals', 'jp'],
+    headers: ['ASIN', '品牌', '标题(中文)', '类目', '价格', '月销量', '星级', '评论数', 'FBA', '利润率'],
+    description: '日亚商品销售数据（共 1294 条）',
+    maxRows: 100,
+  },
+  s25: {
+    page: '/vendor/product-sales.html',
+    varName: 'SALES_DATA',
+    nestedPath: ['boards', '欧亚（德国+英国）', 'totals', 'de'],
+    headers: ['ASIN', '品牌', '标题(中文)', '类目', '价格', '月销量', '星级', '评论数', 'FBA', '利润率'],
+    description: '欧亚商品销售数据（德国+英国）',
+    maxRows: 100,
   },
 }
 
+/** 从 HTML 文本中提取一个 JS 变量的 JSON 值（支持数组和对象） */
+function extractJsVar(html: string, varName: string): unknown | null {
+  const escaped = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // 匹配 var/let/const x = ...;  支持数组和对象（贪婪匹配到匹配的括号对）
+  const re = new RegExp('(?:var|let|const)\\s+' + escaped + '\\s*=\\s*(.+?)(?:\\s*;)?(?:</script|$)', 's')
+  const m = html.match(re)
+  if (!m || !m[1]) return null
+  try { return JSON.parse(m[1].trim()) } catch { return null }
+}
+
+/** 沿嵌套路径从对象中取值 */
+function navigatePath(obj: unknown, path: (string | number)[]): unknown {
+  let current = obj
+  for (const key of path) {
+    if (current == null) return null
+    current = (current as Record<string, unknown>)[String(key)]
+  }
+  return current ?? null
+}
+
 /**
- * 从主站拉取指定数据源的原始数据，返回 DataTablePayload。
- * 仅对已注册在 DATA_FILE_MAP 的数据源有效；其余返回 null（提示走看板）。
+ * 从主站拉取指定数据源：fetch HTML → 提取 JS 变量 → 路径导航 → 截断 → 返回表格。
  */
 async function fetchSourceData(sourceId: string): Promise<DataTablePayload | null> {
-  const mapping = DATA_FILE_MAP[sourceId]
-  if (!mapping) return null
+  const def = SOURCE_DEFS[sourceId]
+  if (!def) return null
 
   try {
     const ac = new AbortController()
-    const timer = setTimeout(() => ac.abort(), 12000)
-    const resp = await fetch(MAIN_SITE_BASE + mapping.url, { signal: ac.signal })
+    const timer = setTimeout(() => ac.abort(), 25000)
+    const resp = await fetch(MAIN_SITE_BASE + def.page, { signal: ac.signal })
     clearTimeout(timer)
     if (!resp.ok) return null
-    const json = await resp.json()
+    const html = await resp.text()
 
-    // 提取行数组
-    let rawRows: unknown[] = []
-    if (mapping.rowKey && Array.isArray((json as Record<string, unknown>)[mapping.rowKey])) {
-      rawRows = (json as Record<string, unknown>)[mapping.rowKey] as unknown[]
-    } else if (Array.isArray(json)) {
-      rawRows = json
-    } else {
-      return null
+    const raw = extractJsVar(html, def.varName)
+    if (raw === null) return null
+
+    // 如果有嵌套路径，沿路径导航到目标数组
+    let target: unknown = raw
+    if (def.nestedPath && def.nestedPath.length > 0) {
+      target = navigatePath(raw, def.nestedPath)
+      if (target === null) return null
     }
 
-    // 取前 50 行避免聊天爆炸，保留 headers
+    const rawRows = Array.isArray(target) ? target : []
+    if (rawRows.length === 0) return null
+
+    const limit = def.maxRows ?? 50
     const src = DATA_SOURCE_REGISTRY[sourceId]
-    const headers = mapping.headers ?? Object.keys(rawRows[0] as object ?? {}).slice(0, 8)
-    const rows = rawRows.slice(0, 50).map((r) => {
+    const first = rawRows[0] as Record<string, unknown>
+    const headers = def.headers ?? Object.keys(first).slice(0, 10)
+
+    const rows = rawRows.slice(0, limit).map((r) => {
       const o = r as Record<string, unknown>
-      return headers.map((h) => String(o[h] ?? '').slice(0, 80))
+      return headers.map((h) => String(o[h] ?? '').slice(0, 120))
     })
 
     return {
-      title: src?.name ?? mapping.description ?? sourceId,
-      description: mapping.description,
-      headers,
-      rows,
-      sourceId,
-      sourceName: src?.name,
+      title: src?.name ?? def.description ?? sourceId,
+      description: `${def.description}（共 ${rawRows.length} 条，显示前 ${rows.length} 条）`,
+      headers, rows, sourceId, sourceName: src?.name,
+      totalRows: rawRows.length,
     }
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
 /** 粗略检测用户是否在要求数据/表格/导出 */
@@ -273,9 +336,9 @@ function guessRequestedSource(text: string, agentSources: string[]): string | nu
   for (const [re, sid] of hints) {
     if (re.test(lower) && agentSources.includes(sid)) return sid
   }
-  // 未命中关键词时返回该智能体的第一个有文件映射的数据源
+  // 未命中关键词时返回该智能体的第一个有页面映射的数据源
   for (const sid of agentSources) {
-    if (DATA_FILE_MAP[sid]) return sid
+    if (SOURCE_DEFS[sid]) return sid
   }
   return null
 }
@@ -653,7 +716,30 @@ function PrivateChat({
   setJobBoardFullscreen: (fs: boolean) => void
 }) {
   const kb = useMemo(() => kbOf(agentId), [agentId])
-  const [msgs, setMsgs] = useState<ChatLine[]>([])
+  const chatStorageKey = `wb-chat-${agentId}`
+
+  // ---- 聊天持久化：从 localStorage 恢复 ----
+  const [msgs, setMsgs] = useState<ChatLine[]>(() => {
+    try {
+      const saved = localStorage.getItem(chatStorageKey)
+      if (saved) return JSON.parse(saved) as ChatLine[]
+    } catch { /* ignore corrupt data */ }
+    return []
+  })
+
+  // ---- 聊天持久化：防抖写入 localStorage ----
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try { localStorage.setItem(chatStorageKey, JSON.stringify(msgs)) } catch { /* quota exceeded */ }
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [msgs, chatStorageKey])
+
+  // ---- 清空会话 ----
+  function clearChat() {
+    setMsgs([])
+    try { localStorage.removeItem(chatStorageKey) } catch { /* ignore */ }
+  }
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState('')
   const [busy, setBusy] = useState(false)
@@ -834,6 +920,14 @@ function PrivateChat({
 
   return (
     <div className="wb-chat">
+      {msgs.length > 0 && (
+        <div className="wb-chat-toolbar">
+          <span className="wb-chat-count">{msgs.length} 条消息</span>
+          <button className="wb-btn wb-btn-ghost" onClick={clearChat} title="清空所有聊天记录">
+            清空会话
+          </button>
+        </div>
+      )}
       <div className="wb-chat-scroll" ref={scrollRef}>
         {msgs.length === 0 && (
           <div className="wb-chat-empty">

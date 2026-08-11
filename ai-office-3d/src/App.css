@@ -2162,6 +2162,20 @@ input[type="date"].mr-input { color-scheme: dark; }
 }
 .wb-chat-empty p { font-size: 12.8px; line-height: 1.65; color: #a4a4c2; margin: 0 0 8px; }
 .wb-chat-empty-tip { font-size: 11.5px; color: #7e7e9c; }
+
+/* 聊天工具栏（清空会话等） */
+.wb-chat-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 16px; border-bottom: 1px solid rgba(255,255,255,.06);
+  background: rgba(0,0,0,.15);
+}
+.wb-chat-count { font-size: 11px; color: #7e7e9c; }
+.wb-btn-ghost {
+  font-size: 11.5px; padding: 4px 10px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.1); background: transparent;
+  color: #9a9ab8; cursor: pointer; transition: all .15s;
+}
+.wb-btn-ghost:hover { background: rgba(255,80,80,.12); border-color: rgba(255,80,80,.25); color: #ff6b6b; }
 /* 消息行：三列网格 [左头像区 | 气泡(1fr) | 右头像区]
    emp: 头像在左列，气泡在中列 → 气泡左边缘固定
    me:  气泡在中列，头像在右列 → 气泡左边缘与 emp 完全对齐 */
